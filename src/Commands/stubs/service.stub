@@ -1,0 +1,45 @@
+<?php
+declare(strict_types=1);
+
+namespace {{namespace}};
+use Hyperf\Collection\Arr;
+use Hyperf\Paginator\LengthAwarePaginator;
+use App\Model\{{model}};
+
+class {{class}} extends Service
+{
+    public function paginate(array $params): LengthAwarePaginator
+    {
+        return {{model}}::query()->filter($params)->orderByDesc('id')->paginate((int) Arr::get($params, 'pageSize', 20));
+    }
+
+    public function show(int $id)
+    {
+        ${{modelName}} = {{model}}::query()->where('id', $id)->first();
+
+        return ${{modelName}};
+    }
+
+    public function create(array $data)
+    {
+        return $this->save(new {{model}}(), $data);
+    }
+
+    public function update({{model}} ${{modelName}}, array $data)
+    {
+        return $this->save(${{modelName}}, $data);
+    }
+
+    public function save({{model}} ${{modelName}}, array $data)
+    {
+        ${{modelName}}->fillDb($data);
+        ${{modelName}}->save();
+
+        return ${{modelName}};
+    }
+
+    public function delete({{model}} ${{modelName}})
+    {
+        return ${{modelName}}->delete();
+    }
+}

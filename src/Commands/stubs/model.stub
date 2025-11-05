@@ -1,0 +1,11 @@
+<?php
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Goletter\ModelFilter\Filterable;
+
+class {{class}} extends Model
+{
+    use Filterable;
+}

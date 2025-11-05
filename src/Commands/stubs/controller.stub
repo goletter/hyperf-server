@@ -1,0 +1,40 @@
+<?php
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Hyperf\Di\Annotation\Inject;
+use App\Service\{{service}};
+
+class {{class}} extends BaseController
+{
+    #[Inject]
+    private {{service}} $service;
+
+    public function index()
+    {
+        return $this->collection($this->service->paginate($this->request->all()));
+    }
+
+    public function show($id)
+    {
+        return $this->success($this->service->show($id));
+    }
+
+    public function store()
+    {
+        return $this->success($this->service->create($this->request->all()));
+    }
+
+    public function update($id)
+    {
+        return $this->success($this->service->update($id, $this->request->all()));
+    }
+
+    public function destroy($id)
+    {
+        $this->service->delete($id);
+
+        return $this->success();
+    }
+}
