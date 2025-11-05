@@ -27,8 +27,8 @@ class MakeModuleCommand extends HyperfCommand
     public function configure()
     {
         parent::configure();
-        $this->setDescription('生成 Model + Service + Controller + Resource + Filter 五层结构')
-            ->addArgument('name', InputArgument::REQUIRED, '模块名称（例如：User）');
+        $this->setDescription('Model + Service + Controller + Resource + Filter five-layer structure is generated')
+            ->addArgument('name', InputArgument::REQUIRED, 'Module name (e.g., User)');
     }
 
     public function handle()
@@ -93,6 +93,7 @@ class MakeModuleCommand extends HyperfCommand
         $namespace = 'App\Controller';
         $class = "{$name}Controller";
         $service = "{$name}Service";
+        $modeName = \Hyperf\Stringable\Str::camel($name);
         $path = BASE_PATH . "/app/Controller/{$class}.php";
 
         if (file_exists($path)) {
@@ -102,8 +103,8 @@ class MakeModuleCommand extends HyperfCommand
 
         $stub = file_get_contents(__DIR__ . '/stubs/controller.stub');
         $content = str_replace(
-            ['{{namespace}}', '{{class}}', '{{service}}', '{{service_var}}'],
-            [$namespace, $class, $service, lcfirst($name)],
+            ['{{namespace}}', '{{class}}', '{{service}}', '{{service_var}}', '{{modelName}}'],
+            [$namespace, $class, $service, lcfirst($name), $modeName],
             $stub
         );
 

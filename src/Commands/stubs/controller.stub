@@ -16,9 +16,9 @@ class {{class}} extends BaseController
         return $this->collection($this->service->paginate($this->request->all()));
     }
 
-    public function show($id)
+    public function show({{model}} ${{modelName}})
     {
-        return $this->success($this->service->show($id));
+        return $this->success(${{modelName}});
     }
 
     public function store()
@@ -26,14 +26,14 @@ class {{class}} extends BaseController
         return $this->success($this->service->create($this->request->all()));
     }
 
-    public function update($id)
+    public function update({{model}} ${{modelName}})
     {
-        return $this->success($this->service->update($id, $this->request->all()));
+        return $this->success($this->service->update(${{modelName}}, $this->request->all()));
     }
 
-    public function destroy($id)
+    public function destroy({{model}} ${{modelName}})
     {
-        $this->service->delete($id);
+        $this->service->delete(${{modelName}});
 
         return $this->success();
     }
