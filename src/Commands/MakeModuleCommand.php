@@ -103,7 +103,7 @@ class MakeModuleCommand extends HyperfCommand
 
         $stub = file_get_contents(__DIR__ . '/stubs/controller.stub');
         $content = str_replace(
-            ['{{namespace}}', '{{class}}', '{{service}}', '{{$name}}', '{{modelName}}'],
+            ['{{namespace}}', '{{class}}', '{{service}}', '{{model}}', '{{modelName}}'],
             [$namespace, $class, $service, $name, $modeName],
             $stub
         );
