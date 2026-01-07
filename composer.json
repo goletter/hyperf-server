@@ -30,6 +30,7 @@
         "goletter/hyperf-resource": "^1.0",
         "goletter/hyperf-traits": "^1.0",
         "goletter/hyperf-utils": "^1.0",
+        "goletter/hyperf-sls-log": "^1.0",
         "hyperf/server": "^3.1"
     },
     "config": {
