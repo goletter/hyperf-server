@@ -7,7 +7,7 @@ use Hyperf\Di\Annotation\Inject;
 use App\Service\{{service}};
 use App\Model\{{model}};
 
-class {{class}} extends BaseController
+class {{class}} extends AbstractController
 {
     #[Inject]
     private {{service}} $service;
