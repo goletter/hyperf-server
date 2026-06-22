@@ -28,9 +28,11 @@
         "php": ">=8.0",
         "goletter/hyperf-modelfilter": "^1.0",
         "goletter/hyperf-resource": "^1.0",
+        "goletter/hyperf-sls-log": "^1.0",
         "goletter/hyperf-traits": "^1.0",
         "goletter/hyperf-utils": "^1.0",
-        "goletter/hyperf-sls-log": "^1.0",
+        "hyperf/filesystem": "^3.1",
+        "hyperf/flysystem-oss": "^1.4",
         "hyperf/server": "^3.1"
     },
     "config": {
