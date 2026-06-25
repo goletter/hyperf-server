@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Goletter\Server\Middleware;
 
 use Hyperf\HttpMessage\Stream\SwooleStream;
