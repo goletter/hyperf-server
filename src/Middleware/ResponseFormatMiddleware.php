@@ -59,10 +59,10 @@ class ResponseFormatMiddleware implements MiddlewareInterface
             // 加密响应数据
             $jsonString = json_encode($data, JSON_UNESCAPED_UNICODE);
             $encryptedData = ResponseEncrypt::encrypt($jsonString);
-            return $this->response->withBody(new SwooleStream(json_encode($encryptedData)));
+            return $response->withBody(new SwooleStream(json_encode($encryptedData)));
         }
 
         // 返回自定义格式
-        return $this->response->withBody(new SwooleStream(json_encode($data)));
+        return $response->withBody(new SwooleStream(json_encode($data)));
     }
 }
