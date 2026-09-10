@@ -6,7 +6,6 @@ namespace Goletter\Server\Middleware;
 
 use Hyperf\Context\Context;
 use Hyperf\Context\RequestContext;
-use OpenTracing\GlobalTracer;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
@@ -29,17 +28,10 @@ class TraceGatewayMiddleware implements MiddlewareInterface
         $traceId = $this->resolveTraceId($request);
         Context::set('trace_id', $traceId);
         // $request = $this->withTraceIdInput($request, $traceId);
-        $tracer = GlobalTracer::get();
 
-        try {
-            $response = $handler->handle($request);
+        $response = $handler->handle($request);
 
-            return $response->withHeader(self::TRACE_ID_HEADER, $traceId);
-        } catch (\Throwable $e) {
-            throw $e;
-        } finally {
-            $tracer->flush();
-        }
+        return $response->withHeader(self::TRACE_ID_HEADER, $traceId);
     }
 
     private function resolveTraceId(ServerRequestInterface $request): string

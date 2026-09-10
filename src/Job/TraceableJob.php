@@ -12,8 +12,8 @@ use ReflectionObject;
 class TraceableJob extends Job
 {
     public function __construct(
-        private readonly JobInterface $job,
-        private readonly string $traceId
+        private JobInterface    $job,
+        private string $traceId
     ) {
         $this->syncMaxAttempts();
     }
