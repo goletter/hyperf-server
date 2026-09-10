@@ -14,7 +14,8 @@ use Throwable;
 /**
  * Drains one job from a per-key Redis waiting list, then enqueues itself again if more remain.
  *
- * Used by QueueService::pushSerial() so callers can enqueue jobs one-by-one while keeping order.
+ * On business-job failure: retry the same head after its delay until maxAttempts is reached,
+ * then drop the head and continue with the next job.
  */
 class SerialJob extends Job
 {
@@ -31,12 +32,18 @@ class SerialJob extends Job
         $waitingKey = $queueService->serialWaitingKey($this->key);
         $redis = $queueService->redis($this->queue);
 
-        $payload = $redis->lIndex($waitingKey, 0);
-        if ($payload === false || $payload === null || $payload === '') {
+        $raw = $redis->lIndex($waitingKey, 0);
+        if ($raw === false || $raw === null || $raw === '') {
             return;
         }
 
-        [$job, $delay] = $this->unpack((string) $payload);
+        $raw = (string) $raw;
+        $entry = $this->unpack($raw);
+        $job = $entry['job'];
+        $delay = $entry['delay'];
+        $attempts = $entry['attempts'];
+        $maxAttempts = $entry['maxAttempts'];
+
         if (! $job instanceof JobInterface) {
             $redis->lPop($waitingKey);
             $this->continueIfNeeded($queueService, $redis, $waitingKey, 0);
@@ -49,7 +56,20 @@ class SerialJob extends Job
         try {
             $job->handle();
         } catch (Throwable $e) {
-            // Drop the failed head so later jobs for this key are not blocked forever.
+            $attempts++;
+            if ($attempts < $maxAttempts) {
+                // Keep head; bump attempts; retry same job after delay.
+                $redis->lSet($waitingKey, 0, serialize([
+                    'job' => $job,
+                    'delay' => $delay,
+                    'attempts' => $attempts,
+                    'maxAttempts' => $maxAttempts,
+                ]));
+                $queueService->push(new self($this->key, $this->queue), $this->queue, $delay);
+                return;
+            }
+
+            // Exhausted: drop and move on.
             $redis->lPop($waitingKey);
             $this->continueIfNeeded($queueService, $redis, $waitingKey, $delay);
             throw $e;
@@ -60,19 +80,34 @@ class SerialJob extends Job
     }
 
     /**
-     * @return array{0: mixed, 1: int}
+     * @return array{job: mixed, delay: int, attempts: int, maxAttempts: int}
      */
     private function unpack(string $payload): array
     {
         $data = unserialize($payload);
         if ($data instanceof JobInterface) {
-            return [$data, 0];
+            return [
+                'job' => $data,
+                'delay' => 0,
+                'attempts' => 0,
+                'maxAttempts' => 1,
+            ];
         }
         if (is_array($data) && isset($data['job'])) {
-            return [$data['job'], max(0, (int) ($data['delay'] ?? 0))];
+            return [
+                'job' => $data['job'],
+                'delay' => max(0, (int) ($data['delay'] ?? 0)),
+                'attempts' => max(0, (int) ($data['attempts'] ?? 0)),
+                'maxAttempts' => max(1, (int) ($data['maxAttempts'] ?? 1)),
+            ];
         }
 
-        return [$data, 0];
+        return [
+            'job' => $data,
+            'delay' => 0,
+            'attempts' => 0,
+            'maxAttempts' => 1,
+        ];
     }
 
     private function continueIfNeeded(QueueService $queueService, mixed $redis, string $waitingKey, int $delay): void

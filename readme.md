@@ -88,32 +88,32 @@ $queue->chain([
 // 用户 A 陆续提交 —— 按提交顺序执行
 $queue->pushSerial('user:1001', new ProcessTaskJob($task1));
 $queue->pushSerial('user:1001', new ProcessTaskJob($task2));
-$queue->pushSerial('user:1001', new ProcessTaskJob($task3));
 
-// 该任务跑完后，间隔 5 秒再跑同 key 的下一个（default 池单位为秒；ms 池为毫秒）
-$queue->pushSerial('user:1001', new ProcessTaskJob($task4), 'default', 5);
-$queue->pushSerial('user:1001', new ProcessTaskJob($task5), 'ms', 200);
+// 间隔 5 秒；失败最多共执行 3 次（含首次），未耗尽则按 delay 重试同一条
+$queue->pushSerial('user:1001', new ProcessTaskJob($task3), 'default', 5, 3);
 
-// 用户 B 不受 A 阻塞，可并行
+// ms 池：步间 / 重试间隔 200ms
+$queue->pushSerial('user:1001', new ProcessTaskJob($task4), 'ms', 200, 3);
+
+// 用户 B 不受 A 阻塞
 $queue->pushSerial('user:1002', new ProcessTaskJob($taskX));
 
-// 查看某 key 仍在等待（含正在执行的头部）的数量
 $queue->serialWaitingCount('user:1001');
 ```
 
 | API | 何时用 |
 |-----|--------|
-| `chain([...])` | 步骤已知，一次性投递整条链；失败**中断**后续 |
-| `pushSerial($key, $job, $queue, $delay)` | 任务陆续到达；同 key 排队；`$delay` 为完成后到下一步的间隔 |
+| `chain([...])` | 步骤已知，一次性投递；失败**中断**后续 |
+| `pushSerial($key, $job, $queue, $delay, $maxAttempts)` | 陆续入队；同 key FIFO；失败按 delay 重试 |
 | `pushBatch([...])` | 全部并行，无顺序 |
 
 实现要点：
 
-- 任务先写入 Redis List `{queue-serial}:{key}:waiting`
-- 仅当列表从空变为 1 时启动一个 `SerialJob` runner（首个立即执行）
-- runner 执行头部任务后 `LPOP`，若还有剩余再入队下一个 `SerialJob`（可带 `$delay`）
-- 当前步失败会丢弃该步并继续，避免堵死同 key 队列
-- `$delay` 挂在**当前这条**任务上：本条结束后，隔多久才启动下一条
+- 任务写入 Redis List `{queue-serial}:{key}:waiting`；列表从空变为 1 时启动 runner（首个立即执行）
+- `$delay`：成功后到下一条的间隔；失败且未达上限时，也是**重试同一条**的间隔
+- `$maxAttempts`：本条最多执行次数（默认 `1` = 失败不重试，直接丢弃并继续下一条）
+- 重试耗尽后丢弃本条并继续后续，避免堵死同 key
+- 外层 `SerialJob` 不依赖 async-queue 重试（避免双调度）
 ### 队列是否空闲
 
 ```php

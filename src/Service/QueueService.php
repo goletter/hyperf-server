@@ -82,14 +82,15 @@ class QueueService extends Service
     /**
      * 按 key 串行入队：可多次、陆续调用；同一 key 下任务按 FIFO 执行，不同 key 互不影响。
      *
-     * $delay：该任务执行完成后，再隔多久启动同 key 的下一个（单位与队列驱动一致：default 一般为秒，ms 池为毫秒）。
-     * 当前步失败会丢弃该步并继续执行同 key 的后续任务（避免堵死）。
+     * $delay：本条结束后（成功，或失败且仍要重试/推进下一条）再隔多久调度（单位与驱动一致）。
+     * $maxAttempts：本条最多执行次数（含首次）。失败未达上限时按 $delay 重试同一条；耗尽后丢弃并继续下一条。
      */
     public function pushSerial(
         string $key,
         JobInterface $job,
         string $queue = self::QUEUE_DEFAULT,
         int $delay = 0,
+        int $maxAttempts = 1,
     ): bool {
         $key = trim($key);
         if ($key === '') {
@@ -100,6 +101,8 @@ class QueueService extends Service
         $payload = serialize([
             'job' => $this->withTrace($job),
             'delay' => max(0, $delay),
+            'attempts' => 0,
+            'maxAttempts' => max(1, $maxAttempts),
         ]);
         $len = (int) $this->redis($queue)->rPush($waitingKey, $payload);
 
