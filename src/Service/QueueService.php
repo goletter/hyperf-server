@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Goletter\Server\Service;
 
+use Goletter\Server\Job\ChainJob;
+use Goletter\Server\Job\SerialJob;
 use Goletter\Server\Job\TraceableJob;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
@@ -11,6 +13,8 @@ use Hyperf\AsyncQueue\JobInterface;
 use Hyperf\Context\Context;
 use Hyperf\Contract\ConfigInterface;
 use Hyperf\Redis\RedisFactory;
+use Hyperf\Redis\RedisProxy;
+use InvalidArgumentException;
 
 class QueueService extends Service
 {
@@ -48,7 +52,7 @@ class QueueService extends Service
     }
 
     /**
-     * 批量推送任务
+     * 批量推送任务（并行入队，可同时被多个 worker 消费）
      */
     public function pushBatch(array $jobs, string $queue = self::QUEUE_DEFAULT): array
     {
@@ -57,6 +61,75 @@ class QueueService extends Service
             $results[] = $this->push($job, $queue, 0);
         }
         return $results;
+    }
+
+    /**
+     * 任务链：按顺序执行，上一步成功后才入队下一步；任一步失败则中断后续。
+     *
+     * $delay 单位与对应队列驱动一致（default 一般为秒，ms 池为毫秒）。
+     *
+     * @param JobInterface[] $jobs
+     */
+    public function chain(array $jobs, string $queue = self::QUEUE_DEFAULT, int $delay = 0): bool
+    {
+        if ($jobs === []) {
+            throw new InvalidArgumentException('Job chain must contain at least one job.');
+        }
+
+        return $this->push(new ChainJob(array_values($jobs), $queue, max(0, $delay)), $queue, 0);
+    }
+
+    /**
+     * 按 key 串行入队：可多次、陆续调用；同一 key 下任务按 FIFO 执行，不同 key 互不影响。
+     *
+     * 适合「用户一个个提交任务」而不是一次性 chain([...]) 的场景。
+     * 当前步失败会丢弃该步并继续执行同 key 的后续任务（避免堵死）。
+     */
+    public function pushSerial(string $key, JobInterface $job, string $queue = self::QUEUE_DEFAULT): bool
+    {
+        $key = trim($key);
+        if ($key === '') {
+            throw new InvalidArgumentException('Serial queue key must not be empty.');
+        }
+
+        $waitingKey = $this->serialWaitingKey($key);
+        $payload = serialize($this->withTrace($job));
+        $len = (int) $this->redis($queue)->rPush($waitingKey, $payload);
+
+        // 只有从空列表推进到 1 时启动 runner，保证同一 key 同时只有一条执行链
+        if ($len === 1) {
+            return $this->push(new SerialJob($key, $queue), $queue, 0);
+        }
+
+        return true;
+    }
+
+    /**
+     * 查看某 key 串行等待队列长度（不含正在执行的那条，执行中仍占 list 头部）。
+     */
+    public function serialWaitingCount(string $key, string $queue = self::QUEUE_DEFAULT): int
+    {
+        return (int) $this->redis($queue)->lLen($this->serialWaitingKey($key));
+    }
+
+    /**
+     * @internal used by SerialJob
+     */
+    public function serialWaitingKey(string $key): string
+    {
+        // hash tag keeps related keys on one Redis Cluster slot
+        return '{queue-serial}:' . $key . ':waiting';
+    }
+
+    /**
+     * @internal used by SerialJob
+     */
+    public function redis(string $queue = self::QUEUE_DEFAULT): RedisProxy
+    {
+        $queueConfig = $this->config->get('async_queue.' . $queue) ?? [];
+        $pool = (string) ($queueConfig['redis']['pool'] ?? 'default');
+
+        return $this->redisFactory->get($pool);
     }
 
     /**
@@ -70,8 +143,7 @@ class QueueService extends Service
         $info = $this->getDriver($queue)->info();
         $queueConfig = $this->config->get('async_queue.' . $queue) ?? [];
         $channel = (string) ($queueConfig['channel'] ?? 'queue');
-        $pool = (string) ($queueConfig['redis']['pool'] ?? 'default');
-        $redis = $this->redisFactory->get($pool);
+        $redis = $this->redis($queue);
         $reserved = (int) $redis->zCard($channel . ':reserved');
 
         $waiting = (int) $info['waiting'];
