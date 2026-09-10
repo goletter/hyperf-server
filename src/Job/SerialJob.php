@@ -36,10 +36,10 @@ class SerialJob extends Job
             return;
         }
 
-        $job = unserialize((string) $payload);
+        [$job, $delay] = $this->unpack((string) $payload);
         if (! $job instanceof JobInterface) {
             $redis->lPop($waitingKey);
-            $this->continueIfNeeded($queueService, $redis, $waitingKey);
+            $this->continueIfNeeded($queueService, $redis, $waitingKey, 0);
             throw new RuntimeException(sprintf(
                 'Serial waiting list "%s" contains a non-JobInterface payload.',
                 $this->key
@@ -51,18 +51,34 @@ class SerialJob extends Job
         } catch (Throwable $e) {
             // Drop the failed head so later jobs for this key are not blocked forever.
             $redis->lPop($waitingKey);
-            $this->continueIfNeeded($queueService, $redis, $waitingKey);
+            $this->continueIfNeeded($queueService, $redis, $waitingKey, $delay);
             throw $e;
         }
 
         $redis->lPop($waitingKey);
-        $this->continueIfNeeded($queueService, $redis, $waitingKey);
+        $this->continueIfNeeded($queueService, $redis, $waitingKey, $delay);
     }
 
-    private function continueIfNeeded(QueueService $queueService, mixed $redis, string $waitingKey): void
+    /**
+     * @return array{0: mixed, 1: int}
+     */
+    private function unpack(string $payload): array
+    {
+        $data = unserialize($payload);
+        if ($data instanceof JobInterface) {
+            return [$data, 0];
+        }
+        if (is_array($data) && isset($data['job'])) {
+            return [$data['job'], max(0, (int) ($data['delay'] ?? 0))];
+        }
+
+        return [$data, 0];
+    }
+
+    private function continueIfNeeded(QueueService $queueService, mixed $redis, string $waitingKey, int $delay): void
     {
         if ((int) $redis->lLen($waitingKey) > 0) {
-            $queueService->push(new self($this->key, $this->queue), $this->queue, 0);
+            $queueService->push(new self($this->key, $this->queue), $this->queue, $delay);
         }
     }
 }

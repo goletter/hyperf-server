@@ -82,21 +82,28 @@ class QueueService extends Service
     /**
      * 按 key 串行入队：可多次、陆续调用；同一 key 下任务按 FIFO 执行，不同 key 互不影响。
      *
-     * 适合「用户一个个提交任务」而不是一次性 chain([...]) 的场景。
+     * $delay：该任务执行完成后，再隔多久启动同 key 的下一个（单位与队列驱动一致：default 一般为秒，ms 池为毫秒）。
      * 当前步失败会丢弃该步并继续执行同 key 的后续任务（避免堵死）。
      */
-    public function pushSerial(string $key, JobInterface $job, string $queue = self::QUEUE_DEFAULT): bool
-    {
+    public function pushSerial(
+        string $key,
+        JobInterface $job,
+        string $queue = self::QUEUE_DEFAULT,
+        int $delay = 0,
+    ): bool {
         $key = trim($key);
         if ($key === '') {
             throw new InvalidArgumentException('Serial queue key must not be empty.');
         }
 
         $waitingKey = $this->serialWaitingKey($key);
-        $payload = serialize($this->withTrace($job));
+        $payload = serialize([
+            'job' => $this->withTrace($job),
+            'delay' => max(0, $delay),
+        ]);
         $len = (int) $this->redis($queue)->rPush($waitingKey, $payload);
 
-        // 只有从空列表推进到 1 时启动 runner，保证同一 key 同时只有一条执行链
+        // 只有从空列表推进到 1 时启动 runner，保证同一 key 同时只有一条执行链；首个立即执行
         if ($len === 1) {
             return $this->push(new SerialJob($key, $queue), $queue, 0);
         }
