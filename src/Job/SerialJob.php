@@ -16,6 +16,8 @@ use Throwable;
  *
  * On business-job failure: retry the same head after its delay until maxAttempts is reached,
  * then drop the head and continue with the next job.
+ *
+ * A global concurrency slot prevents too many serial keys from running at once (FD / resource storm).
  */
 class SerialJob extends Job
 {
@@ -29,6 +31,23 @@ class SerialJob extends Job
     {
         /** @var QueueService $queueService */
         $queueService = ApplicationContext::getContainer()->get(QueueService::class);
+
+        $slot = $queueService->acquireSerialSlot($this->queue);
+        if ($slot === null) {
+            // Too many SerialJobs running — back off without touching the waiting head.
+            $queueService->push(new self($this->key, $this->queue), $this->queue, $queueService->serialBusyDelay());
+            return;
+        }
+
+        try {
+            $this->process($queueService);
+        } finally {
+            $queueService->releaseSerialSlot($slot, $this->queue);
+        }
+    }
+
+    private function process(QueueService $queueService): void
+    {
         $waitingKey = $queueService->serialWaitingKey($this->key);
         $redis = $queueService->redis($this->queue);
 
@@ -58,7 +77,6 @@ class SerialJob extends Job
         } catch (Throwable $e) {
             $attempts++;
             if ($attempts < $maxAttempts) {
-                // Keep head; bump attempts; retry same job after delay.
                 $redis->lSet($waitingKey, 0, serialize([
                     'job' => $job,
                     'delay' => $delay,
@@ -69,7 +87,6 @@ class SerialJob extends Job
                 return;
             }
 
-            // Exhausted: drop and move on.
             $redis->lPop($waitingKey);
             $this->continueIfNeeded($queueService, $redis, $waitingKey, $delay);
             throw $e;

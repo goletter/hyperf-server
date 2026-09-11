@@ -114,6 +114,23 @@ $queue->serialWaitingCount('user:1001');
 - `$maxAttempts`：本条最多执行次数（默认 `1` = 失败不重试，直接丢弃并继续下一条）
 - 重试耗尽后丢弃本条并继续后续，避免堵死同 key
 - 外层 `SerialJob` 不依赖 async-queue 重试（避免双调度）
+- **全局并发**：默认最多 32 个 `SerialJob` 同时跑（跨 key）；满了会 `busy_delay` 后再抢槽，减轻「Too many open files」
+
+```bash
+php bin/hyperf.php vendor:publish goletter/hyperf-server
+```
+
+`config/autoload/queue_serial.php`：
+
+```php
+return [
+    'max_concurrent' => 32,   // 0 = 不限制
+    'busy_delay' => 1,
+    'slot_lease_seconds' => 600,
+];
+```
+
+数据量大时建议同时：调低 `async_queue.*.concurrent.limit`、提高进程 `ulimit -n`、日志尽量打 stdout/stderr（避免每条日志抢文件句柄）。
 ### 队列是否空闲
 
 ```php

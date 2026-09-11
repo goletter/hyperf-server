@@ -132,6 +132,89 @@ class QueueService extends Service
     }
 
     /**
+     * Global SerialJob concurrency key (cross all serial keys).
+     *
+     * @internal used by SerialJob
+     */
+    public function serialConcurrentKey(): string
+    {
+        return '{queue-serial}:concurrent';
+    }
+
+    /**
+     * 0 = unlimited. Caps how many SerialJob handlers may run at once (all keys).
+     */
+    public function serialMaxConcurrent(): int
+    {
+        return max(0, (int) ($this->config->get('queue_serial.max_concurrent') ?? 32));
+    }
+
+    /**
+     * Delay before retrying a SerialJob when the concurrency slot is full.
+     */
+    public function serialBusyDelay(): int
+    {
+        return max(1, (int) ($this->config->get('queue_serial.busy_delay') ?? 1));
+    }
+
+    public function serialSlotLeaseSeconds(): int
+    {
+        return max(30, (int) ($this->config->get('queue_serial.slot_lease_seconds') ?? 600));
+    }
+
+    /**
+     * Acquire a global execution slot. Returns token on success, null when busy.
+     *
+     * @internal used by SerialJob
+     */
+    public function acquireSerialSlot(string $queue = self::QUEUE_DEFAULT): ?string
+    {
+        $max = $this->serialMaxConcurrent();
+        if ($max <= 0) {
+            return '';
+        }
+
+        $token = bin2hex(random_bytes(8));
+        $now = time();
+        $expiredBefore = $now - $this->serialSlotLeaseSeconds();
+
+        $script = <<<'LUA'
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+if redis.call('ZCARD', KEYS[1]) > tonumber(ARGV[4]) then
+  redis.call('ZREM', KEYS[1], ARGV[3])
+  return 0
+end
+return 1
+LUA;
+
+        $ok = (int) $this->redis($queue)->eval(
+            $script,
+            [
+                $this->serialConcurrentKey(),
+                (string) $expiredBefore,
+                (string) $now,
+                $token,
+                (string) $max,
+            ],
+            1
+        );
+
+        return $ok === 1 ? $token : null;
+    }
+
+    /**
+     * @internal used by SerialJob
+     */
+    public function releaseSerialSlot(?string $token, string $queue = self::QUEUE_DEFAULT): void
+    {
+        if ($token === null || $token === '') {
+            return;
+        }
+        $this->redis($queue)->zRem($this->serialConcurrentKey(), $token);
+    }
+
+    /**
      * @internal used by SerialJob
      */
     public function redis(string $queue = self::QUEUE_DEFAULT): RedisProxy

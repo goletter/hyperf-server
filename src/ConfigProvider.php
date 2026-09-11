@@ -23,7 +23,14 @@ class ConfigProvider
             ],
             'listeners' => [
             ],
-            'publish' => [],
+            'publish' => [
+                [
+                    'id' => 'queue_serial',
+                    'description' => 'Serial queue (pushSerial) concurrency config.',
+                    'source' => __DIR__ . '/../publish/queue_serial.php',
+                    'destination' => BASE_PATH . '/config/autoload/queue_serial.php',
+                ],
+            ],
         ];
     }
 }
