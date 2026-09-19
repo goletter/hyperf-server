@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Goletter\Server\Service;
 
+use Goletter\Server\BaseService;
 use Goletter\Server\Job\ChainJob;
 use Goletter\Server\Job\SerialJob;
 use Goletter\Server\Job\TraceableJob;
@@ -16,7 +17,7 @@ use Hyperf\Redis\RedisFactory;
 use Hyperf\Redis\RedisProxy;
 use InvalidArgumentException;
 
-class QueueService extends Service
+class QueueService extends BaseService
 {
     const QUEUE_DEFAULT = 'default';
 

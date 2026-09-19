@@ -2,11 +2,13 @@
 declare(strict_types=1);
 
 namespace {{namespace}};
+
+use App\Model\{{model}};
+use Goletter\Server\BaseService;
 use Hyperf\Collection\Arr;
 use Hyperf\Paginator\LengthAwarePaginator;
-use App\Model\{{model}};
 
-class {{class}} extends Service
+class {{class}} extends BaseService
 {
     public function paginate(array $params): LengthAwarePaginator
     {

@@ -1,11 +1,12 @@
 <?php
+
 declare(strict_types=1);
 
-namespace Goletter\Server\Service;
+namespace Goletter\Server;
 
 use Goletter\Resource\ApiResponse;
 
-class Service
+class BaseService
 {
     use ApiResponse;
 }
