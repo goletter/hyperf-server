@@ -65,12 +65,13 @@ class ChainFailedCommand extends HyperfCommand
 
         $rows = array_map(static fn (array $chain) => [
             $chain['id'],
+            $chain['key'] === $chain['id'] ? '-' : $chain['key'],
             $chain['queue'],
             $chain['steps'],
             $chain['failed_at'],
             $chain['exception'] . ': ' . mb_strimwidth($chain['error'], 0, 80, '...'),
         ], $queueService->failedChains($queue, $limit));
 
-        $this->table(['id', 'queue', 'remaining steps', 'failed at', 'error'], $rows);
+        $this->table(['id', 'key', 'queue', 'remaining steps', 'failed at', 'error'], $rows);
     }
 }

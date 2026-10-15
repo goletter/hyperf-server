@@ -90,14 +90,35 @@ class QueueService extends BaseService
      * 步骤整体存入 Redis，复用串行队列的 runner 租约与巡检：worker 被杀、投递失败后会自动续跑。
      * 被恢复的那一步可能重复执行，步骤需幂等。
      *
+     * $key：相同 key 的多条链按入队顺序排队执行（与同 key 的 pushSerial 共用一条队列），不同 key 并发；
+     *       空字符串表示独立执行。某条链失败只移走它自己的剩余步骤，同 key 后面的链继续执行。
      * $delay：每步成功后到下一步的间隔，失败重试的间隔也用它（单位与队列驱动一致：default 秒，ms 池毫秒）。
+     * $chainDelay：本链结束（全部成功或失败中断）后，同 key 下一条链开始前的间隔（单位同 $delay）；不带 key 时无意义。
      * $maxAttempts：每步最多执行次数（含首次），默认 1 = 失败即中断。
      *
-     * @param JobInterface[] $jobs
-     * @return string 链 ID（串行 key）
+     * 兼容旧写法 chain($jobs, $queue, $delay, $maxAttempts)。
+     *
+     * @param JobInterface[]|string $key
+     * @param null|JobInterface[]|string $jobs
+     * @return string 链 ID，用于 retryChain() / forgetFailedChain()
      */
-    public function chain(array $jobs, ?string $queue = null, int $delay = 0, int $maxAttempts = 1): string
-    {
+    public function chain(
+        string|array $key,
+        array|string|null $jobs = null,
+        string|int|null $queue = null,
+        int $delay = 0,
+        int $chainDelay = 0,
+        int $maxAttempts = 1,
+    ): string {
+        if (is_array($key)) {
+            [$key, $jobs, $queue, $delay, $maxAttempts, $chainDelay] = ['', $key, $jobs, (int) $queue, max(1, $delay), 0];
+        }
+        if (! is_array($jobs)) {
+            throw new InvalidArgumentException('Job chain jobs must be an array.');
+        }
+        $queue = $queue === null ? null : (string) $queue;
+        $key = trim($key);
+
         if ($jobs === []) {
             throw new InvalidArgumentException('Job chain must contain at least one job.');
         }
@@ -114,22 +135,30 @@ class QueueService extends BaseService
         }
 
         $queue = $this->resolveQueue($jobs[0], $queue);
-        $key = 'chain:' . $this->newSerialToken();
+        $chainId = 'chain:' . $this->newSerialToken();
+        if ($key === '') {
+            $key = $chainId;
+        }
 
+        $total = count($jobs);
         $payloads = [];
-        foreach ($jobs as $job) {
+        foreach ($jobs as $step => $job) {
             $payloads[] = serialize([
                 'job' => $this->withTrace($job),
                 'delay' => max(0, $delay),
                 'attempts' => 0,
                 'maxAttempts' => max(1, $maxAttempts),
                 'stopOnFailure' => true,
+                'chainId' => $chainId,
+                'step' => $step,
+                'steps' => $total,
+                'chainDelay' => max(0, $chainDelay),
             ]);
         }
 
         $this->enqueueSerial($key, $queue, $payloads);
 
-        return $key;
+        return $chainId;
     }
 
     /**
@@ -210,7 +239,7 @@ LUA;
     /**
      * 失败的任务链列表（最近失败的在前）。已过期（failed_ttl_seconds）的记录会被顺带清理。
      *
-     * @return array<int, array{id: string, queue: string, steps: int, error: string, exception: string, failed_at: string}>
+     * @return array<int, array{id: string, key: string, queue: string, steps: int, error: string, exception: string, failed_at: string}>
      */
     public function failedChains(?string $queue = null, int $limit = 100): array
     {
@@ -223,16 +252,18 @@ LUA;
             $ids = (array) $redis->zRevRange($registryKey, 0, max(1, $limit) - 1);
             foreach ($ids as $id) {
                 $id = (string) $id;
-                $steps = (int) $redis->lLen($this->serialFailedKey($id));
+                $info = json_decode((string) $redis->hGet($infoKey, $id), true) ?: [];
+                $key = (string) ($info['key'] ?? $id);
+                $steps = (int) $redis->lLen($this->serialFailedKey($key, $id));
                 if ($steps === 0) {
                     $redis->zRem($registryKey, $id);
                     $redis->hDel($infoKey, $id);
                     continue;
                 }
 
-                $info = json_decode((string) $redis->hGet($infoKey, $id), true) ?: [];
                 $result[] = [
                     'id' => $id,
+                    'key' => $key,
                     'queue' => $name,
                     'steps' => $steps,
                     'error' => (string) ($info['error'] ?? ''),
@@ -248,7 +279,9 @@ LUA;
     /**
      * 从失败的那一步重新执行任务链（该步执行次数重新计算）。
      *
-     * @return bool false 表示没有找到该失败链，或该链已在执行中
+     * 剩余步骤追加到所属 key 的队尾：同 key 有其他链在执行时，排在它们之后。
+     *
+     * @return bool false 表示没有找到该失败链
      */
     public function retryChain(string $chainId, ?string $queue = null): bool
     {
@@ -258,18 +291,19 @@ LUA;
         }
 
         $redis = $this->redis($queue);
+        $key = $this->failedChainKey($chainId, $queue);
         $token = $this->newSerialToken();
-        $redis->zAdd($this->serialRegistryKey($queue), time(), $chainId);
+        $redis->zAdd($this->serialRegistryKey($queue), time(), $key);
 
         $script = <<<'LUA'
-if redis.call('EXISTS', KEYS[3]) == 0 then
+local items = redis.call('LRANGE', KEYS[3], 0, -1)
+if #items == 0 then
   return -1
 end
-if redis.call('EXISTS', KEYS[1]) == 1 then
-  return -2
+for i = 1, #items do
+  redis.call('RPUSH', KEYS[1], items[i])
 end
-redis.call('RENAME', KEYS[3], KEYS[1])
-redis.call('PERSIST', KEYS[1])
+redis.call('DEL', KEYS[3])
 if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) then
   return 1
 end
@@ -279,9 +313,9 @@ LUA;
         $result = (int) $redis->eval(
             $script,
             [
-                $this->serialWaitingKey($chainId),
-                $this->serialRunnerKey($chainId),
-                $this->serialFailedKey($chainId),
+                $this->serialWaitingKey($key),
+                $this->serialRunnerKey($key),
+                $this->serialFailedKey($key, $chainId),
                 $token,
                 (string) $this->serialRunnerLeaseMs(),
             ],
@@ -296,7 +330,7 @@ LUA;
         $redis->hDel($this->chainFailedInfoKey($queue), $chainId);
 
         if ($result === 1) {
-            $this->startSerialRunner($chainId, $queue, $token);
+            $this->startSerialRunner($key, $queue, $token);
         }
 
         return true;
@@ -313,24 +347,34 @@ LUA;
         }
 
         $redis = $this->redis($queue);
-        $redis->del($this->serialFailedKey($chainId));
+        $redis->del($this->serialFailedKey($this->failedChainKey($chainId, $queue), $chainId));
         $redis->hDel($this->chainFailedInfoKey($queue), $chainId);
 
         return (int) $redis->zRem($this->chainFailedRegistryKey($queue), $chainId) > 0;
     }
 
     /**
+     * 在剩余步骤移入失败列表之前调用，保证失败列表一定能通过登记表找到。
+     *
      * @internal used by SerialJob
      */
-    public function recordFailedChain(string $chainId, string $queue, Throwable $e): void
+    public function recordFailedChain(string $chainId, string $key, string $queue, Throwable $e): void
     {
         $redis = $this->redis($queue);
         $redis->hSet($this->chainFailedInfoKey($queue), $chainId, json_encode([
+            'key' => $key,
             'error' => mb_substr($e->getMessage(), 0, 1000),
             'exception' => $e::class,
             'failed_at' => date('Y-m-d H:i:s'),
         ], JSON_UNESCAPED_UNICODE));
         $redis->zAdd($this->chainFailedRegistryKey($queue), time(), $chainId);
+    }
+
+    private function failedChainKey(string $chainId, string $queue): string
+    {
+        $info = json_decode((string) $this->redis($queue)->hGet($this->chainFailedInfoKey($queue), $chainId), true) ?: [];
+
+        return (string) ($info['key'] ?? $chainId);
     }
 
     private function findFailedChainQueue(string $chainId): ?string
@@ -371,7 +415,7 @@ LUA;
      *
      * @param null|string $queue null 表示 async_queue 中配置的全部队列
      * @param int $idleSeconds 等待列表为空且超过该时长没有入队的 key 才从登记表移除
-     * @return array<string, array{checked: int, recovered: int, removed: int}>
+     * @return array<string, array{checked: int, recovered: int, removed: int, woken: int}>
      */
     public function recoverSerial(?string $queue = null, int $idleSeconds = 60): array
     {
@@ -444,6 +488,9 @@ LUA;
                 }
             } while ($cursor);
 
+            // 持有名额的 worker 崩溃后名额过期，但没有人释放来唤醒排队者，由巡检补一次分配
+            $result['woken'] = $this->pumpSerialSlots($name);
+
             $stats[$name] = $result;
         }
 
@@ -472,9 +519,9 @@ LUA;
     /**
      * 失败任务链的剩余步骤（队头为失败的那一步）。
      */
-    public function serialFailedKey(string $key): string
+    public function serialFailedKey(string $key, string $chainId): string
     {
-        return 'queue-serial:{' . $key . '}:failed';
+        return 'queue-serial:{' . $key . '}:failed:' . $chainId;
     }
 
     /**
@@ -516,7 +563,15 @@ LUA;
      */
     public function serialConcurrentKey(): string
     {
-        return 'queue-serial:concurrent';
+        return 'queue-serial:{slots}:concurrent';
+    }
+
+    /**
+     * 等待并发名额的 runner 队列（FIFO）。
+     */
+    public function serialSlotQueueKey(): string
+    {
+        return 'queue-serial:{slots}:waiting';
     }
 
     /**
@@ -525,20 +580,6 @@ LUA;
     public function serialMaxConcurrent(): int
     {
         return max(0, (int) ($this->config->get('queue_serial.max_concurrent') ?? 32));
-    }
-
-    /**
-     * 并发名额已满时的退避时间，按队列驱动的单位返回（default 为秒，ms 池为毫秒）。
-     */
-    public function serialBusyDelay(string $queue = self::QUEUE_DEFAULT): int
-    {
-        $ms = $this->config->get('queue_serial.busy_delay_ms');
-        if ($ms === null) {
-            // 兼容旧配置 busy_delay（秒）
-            $ms = (int) ($this->config->get('queue_serial.busy_delay') ?? 1) * 1000;
-        }
-
-        return max(1, $this->msToDriverDelay($queue, max(1, (int) $ms)));
     }
 
     public function serialSlotLeaseSeconds(): int
@@ -609,7 +650,7 @@ LUA;
     /**
      * @internal used by SerialJob
      */
-    public function renewSerialRunner(string $key, string $token, string $queue = self::QUEUE_DEFAULT): bool
+    public function renewSerialRunner(string $key, string $token, string $queue = self::QUEUE_DEFAULT, ?int $leaseMs = null): bool
     {
         $script = <<<'LUA'
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -620,7 +661,7 @@ LUA;
 
         return (int) $this->redis($queue)->eval(
             $script,
-            [$this->serialRunnerKey($key), $token, (string) $this->serialRunnerLeaseMs()],
+            [$this->serialRunnerKey($key), $token, (string) ($leaseMs ?? $this->serialRunnerLeaseMs())],
             1
         ) === 1;
     }
@@ -629,7 +670,7 @@ LUA;
      * 原子地推进串行队列，并决定是否需要投递下一个 runner。
      *
      * $mode：pop 弹出队头；keep 保留队头；replace 用 $headPayload 覆盖队头（失败重试）；
-     *        clear 清空整个列表；fail 用 $headPayload 覆盖队头后把整个列表移到失败列表（任务链中断，可重跑）。
+     *        fail 用 $headPayload 覆盖队头后把队头起 $failCount 条（该链剩余步骤）移到该链的失败列表。
      * 返回：-1 已失去执行权；0 队列已空、租约已释放；1 需以 $nextToken 投递下一个 runner。
      *
      * @internal used by SerialJob
@@ -642,6 +683,8 @@ LUA;
         int $nextDelayMs = 0,
         string $headPayload = '',
         string $queue = self::QUEUE_DEFAULT,
+        string $chainId = '',
+        int $failCount = 1,
     ): int {
         $script = <<<'LUA'
 if redis.call('GET', KEYS[2]) ~= ARGV[1] then
@@ -651,13 +694,17 @@ if ARGV[3] == 'pop' then
   redis.call('LPOP', KEYS[1])
 elseif ARGV[3] == 'replace' and redis.call('LLEN', KEYS[1]) > 0 then
   redis.call('LSET', KEYS[1], 0, ARGV[5])
-elseif ARGV[3] == 'clear' then
-  redis.call('DEL', KEYS[1])
 elseif ARGV[3] == 'fail' and redis.call('LLEN', KEYS[1]) > 0 then
   if ARGV[5] ~= '' then
     redis.call('LSET', KEYS[1], 0, ARGV[5])
   end
-  redis.call('RENAME', KEYS[1], KEYS[3])
+  for i = 1, tonumber(ARGV[7]) do
+    local item = redis.call('LPOP', KEYS[1])
+    if not item then
+      break
+    end
+    redis.call('RPUSH', KEYS[3], item)
+  end
   if tonumber(ARGV[6]) > 0 then
     redis.call('EXPIRE', KEYS[3], ARGV[6])
   end
@@ -675,13 +722,14 @@ LUA;
             [
                 $this->serialWaitingKey($key),
                 $this->serialRunnerKey($key),
-                $this->serialFailedKey($key),
+                $this->serialFailedKey($key, $chainId),
                 $token,
                 $nextToken,
                 $mode,
                 (string) ($this->serialRunnerLeaseMs() + max(0, $nextDelayMs)),
                 $headPayload,
                 (string) $this->chainFailedTtlSeconds(),
+                (string) max(1, $failCount),
             ],
             3
         );
@@ -726,11 +774,12 @@ LUA;
     }
 
     /**
-     * Acquire a global execution slot. Returns token on success, null when busy.
+     * 申请全局并发名额。拿到返回名额令牌（不限并发时为空串）；名额已满或已有人排队时，
+     * 把当前 runner 放入 FIFO 等待队列并返回 null，名额释放后按顺序把名额直接交给它。
      *
      * @internal used by SerialJob
      */
-    public function acquireSerialSlot(string $queue = self::QUEUE_DEFAULT): ?string
+    public function acquireSerialSlot(string $queue, string $key, string $runToken): ?string
     {
         $max = $this->serialMaxConcurrent();
         if ($max <= 0) {
@@ -739,31 +788,134 @@ LUA;
 
         $token = $this->newSerialToken();
         $now = time();
-        $expiredBefore = $now - $this->serialSlotLeaseSeconds();
+
+        // 排队期间保持执行权，避免巡检把排队中的 key 当成丢失而重复拉起
+        $this->renewSerialRunner($key, $runToken, $queue, $this->serialSlotWaitSeconds() * 1000);
 
         $script = <<<'LUA'
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
-if redis.call('ZCARD', KEYS[1]) > tonumber(ARGV[4]) then
-  redis.call('ZREM', KEYS[1], ARGV[3])
-  return 0
+if redis.call('LLEN', KEYS[2]) == 0 and redis.call('ZCARD', KEYS[1]) < tonumber(ARGV[4]) then
+  redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+  return 1
 end
-return 1
+redis.call('RPUSH', KEYS[2], ARGV[5])
+return 0
 LUA;
 
         $ok = (int) $this->redis($queue)->eval(
             $script,
             [
                 $this->serialConcurrentKey(),
-                (string) $expiredBefore,
+                $this->serialSlotQueueKey(),
+                (string) ($now - $this->serialSlotLeaseSeconds()),
                 (string) $now,
                 $token,
                 (string) $max,
+                json_encode(['queue' => $queue, 'key' => $key, 'token' => $runToken]),
             ],
-            1
+            2
         );
 
-        return $ok === 1 ? $token : null;
+        if ($ok === 1) {
+            $this->renewSerialRunner($key, $runToken, $queue);
+            return $token;
+        }
+
+        // 可能刚好有名额空出来（包括轮到自己），立即分配
+        $this->pumpSerialSlots($queue);
+
+        return null;
+    }
+
+    /**
+     * 接管等待队列分配给自己的名额；名额已过期则返回 null。
+     *
+     * @internal used by SerialJob
+     */
+    public function adoptSerialSlot(string $slot, string $queue = self::QUEUE_DEFAULT): ?string
+    {
+        $redis = $this->redis($queue);
+        if ($redis->zScore($this->serialConcurrentKey(), $slot) === false) {
+            return null;
+        }
+        $redis->zAdd($this->serialConcurrentKey(), ['XX'], time(), $slot);
+
+        return $slot;
+    }
+
+    /**
+     * 有空闲名额时，按 FIFO 顺序把名额分配给等待中的 runner 并投递它们。
+     *
+     * @internal used by SerialJob / recover process
+     * @return int 本次唤醒的 runner 数
+     */
+    public function pumpSerialSlots(string $queue = self::QUEUE_DEFAULT): int
+    {
+        $max = $this->serialMaxConcurrent();
+        if ($max <= 0) {
+            return 0;
+        }
+
+        $script = <<<'LUA'
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local out = {}
+for i = 4, #ARGV do
+  if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then
+    break
+  end
+  local entry = redis.call('LPOP', KEYS[2])
+  if not entry then
+    break
+  end
+  redis.call('ZADD', KEYS[1], ARGV[3], ARGV[i])
+  table.insert(out, entry)
+  table.insert(out, ARGV[i])
+end
+return out
+LUA;
+
+        $woken = 0;
+        $redis = $this->redis($queue);
+        do {
+            $tokens = [];
+            for ($i = 0; $i < 32; ++$i) {
+                $tokens[] = $this->newSerialToken();
+            }
+            $now = time();
+            $result = (array) $redis->eval(
+                $script,
+                array_merge(
+                    [
+                        $this->serialConcurrentKey(),
+                        $this->serialSlotQueueKey(),
+                        (string) ($now - $this->serialSlotLeaseSeconds()),
+                        (string) $max,
+                        (string) $now,
+                    ],
+                    $tokens
+                ),
+                2
+            );
+
+            for ($i = 0; $i + 1 < count($result); $i += 2) {
+                $entry = json_decode((string) $result[$i], true) ?: [];
+                $slot = (string) $result[$i + 1];
+                $entryQueue = (string) ($entry['queue'] ?? $queue);
+                try {
+                    $this->push(
+                        new SerialJob((string) ($entry['key'] ?? ''), $entryQueue, (string) ($entry['token'] ?? ''), $slot),
+                        $entryQueue,
+                        0
+                    );
+                    ++$woken;
+                } catch (Throwable) {
+                    // 该 key 的执行权会在 slot_wait_seconds 后过期，由巡检重新拉起
+                    $redis->zRem($this->serialConcurrentKey(), $slot);
+                }
+            }
+        } while (count($result) >= 64);
+
+        return $woken;
     }
 
     /**
@@ -780,6 +932,8 @@ LUA;
     }
 
     /**
+     * 释放名额，并把空出的名额交给等待队列中的下一个 runner。
+     *
      * @internal used by SerialJob
      */
     public function releaseSerialSlot(?string $token, string $queue = self::QUEUE_DEFAULT): void
@@ -788,6 +942,54 @@ LUA;
             return;
         }
         $this->redis($queue)->zRem($this->serialConcurrentKey(), $token);
+        $this->pumpSerialSlots($queue);
+    }
+
+    /**
+     * 执行前在队头记下本次开始（runs + 1），用于识别 worker 被杀 / 超时被接管的次数。
+     *
+     * @internal used by SerialJob
+     * @return bool false 表示已失去执行权
+     */
+    public function markSerialStart(string $key, string $runToken, string $headPayload, string $queue = self::QUEUE_DEFAULT): bool
+    {
+        $script = <<<'LUA'
+if redis.call('GET', KEYS[2]) ~= ARGV[1] or redis.call('LLEN', KEYS[1]) == 0 then
+  return 0
+end
+redis.call('LSET', KEYS[1], 0, ARGV[2])
+return 1
+LUA;
+
+        return (int) $this->redis($queue)->eval(
+            $script,
+            [$this->serialWaitingKey($key), $this->serialRunnerKey($key), $runToken, $headPayload],
+            2
+        ) === 1;
+    }
+
+    /**
+     * 单步最长执行时间（秒）。超过后停止续租，由巡检接手（该步按「异常中断」计数），0 = 不限制。
+     */
+    public function serialMaxRunSeconds(): int
+    {
+        return max(0, (int) ($this->config->get('queue_serial.max_run_seconds') ?? 3600));
+    }
+
+    /**
+     * 同一步允许异常中断（worker 被杀、超过 max_run_seconds）的次数，达到后按失败处理，避免无限重跑。
+     */
+    public function serialMaxLostRuns(): int
+    {
+        return max(1, (int) ($this->config->get('queue_serial.max_lost_runs') ?? 3));
+    }
+
+    /**
+     * 排队等名额时保持执行权的时长（秒）。等待超过该时长，巡检会重新拉起该 key（重新排队）。
+     */
+    public function serialSlotWaitSeconds(): int
+    {
+        return max(60, (int) ($this->config->get('queue_serial.slot_wait_seconds') ?? 3600));
     }
 
     /**

@@ -77,7 +77,26 @@ $chainId = $queue->chain([
     new Step1Job($id),
     new Step2Job($id),
 ], 'default', 5, 3);
+
+// 带 key：同 key 的多条链按入队顺序排队（一条跑完再跑下一条），不同 key 并发
+// chain($key, $jobs, $queue = null, $delay = 0, $chainDelay = 0, $maxAttempts = 1)
+$queue->chain("user:{$userId}", [
+    new Step1Job($id),
+    new Step2Job($id),
+], null, 10);
+
+// 步间隔 10 秒；本链结束后隔 60 秒再开始同 key 的下一条链
+$queue->chain("user:{$userId}", [$a, $b], null, 10, 60);
+
+// 再加上每步失败最多执行 3 次
+$queue->chain("user:{$userId}", [$a, $b], null, 10, 60, 3);
 ```
+
+带 key 时：
+
+- 与同 key 的 `pushSerial` 共用一条队列，按入队顺序执行
+- 某条链失败只移走它自己的剩余步骤，同 key 后面的链继续执行；`retryChain` 重跑时追加到该 key 队尾
+- 一条链结束（全部成功或失败中断）后等待 `$chainDelay` 再开始同 key 的下一条链，不使用 `$delay`；默认 0 立即开始
 
 实现要点：
 
@@ -127,7 +146,7 @@ $queue->serialWaitingCount('user:1001');
 
 | API | 何时用 |
 |-----|--------|
-| `chain([...])` | 步骤已知，一次性投递；失败**中断**后续 |
+| `chain([...])` / `chain($key, [...])` | 步骤已知，一次性投递；失败**中断**后续；带 key 时同 key 的链排队 |
 | `pushSerial($key, $job, $queue, $delay, $maxAttempts)` | 陆续入队；同 key FIFO；失败按 delay 重试 |
 | `pushBatch([...])` | 全部并行，无顺序 |
 
@@ -140,7 +159,9 @@ $queue->serialWaitingCount('user:1001');
 - `$maxAttempts`：本条最多执行次数（默认 `1` = 失败不重试，直接丢弃并继续下一条）
 - 重试耗尽后丢弃本条并继续后续，避免堵死同 key
 - 外层 `SerialJob` 不依赖 async-queue 重试（避免双调度）
-- **全局并发**：默认最多 32 个 `SerialJob` 同时跑（跨 key）；满了会 `busy_delay_ms` 后再抢槽（自动换算为秒或毫秒队列的单位），减轻「Too many open files」
+- **全局并发**：默认最多 32 个 `SerialJob` 同时跑（跨 key），减轻「Too many open files」；满了的 runner 进入 FIFO 等待队列，名额释放时按顺序直接分配，不空转、不饿死
+- **单步最长执行时间** `max_run_seconds`（默认 3600）：超过后停止续租，由巡检接手重跑该步（原执行可能仍在跑，步骤需幂等）
+- **异常中断上限** `max_lost_runs`（默认 3）：同一步因 worker 被杀或超时被接管达到该次数，按失败处理（`pushSerial` 丢弃该条，任务链进入失败列表），避免无限重跑
 
 ```bash
 php bin/hyperf.php vendor:publish goletter/hyperf-server
@@ -151,9 +172,11 @@ php bin/hyperf.php vendor:publish goletter/hyperf-server
 ```php
 return [
     'max_concurrent' => 32,       // 0 = 不限制
-    'busy_delay_ms' => 1000,
+    'slot_wait_seconds' => 3600,  // 排队等名额时保留执行权的时长
     'slot_lease_seconds' => 600,
     'runner_lease_seconds' => 300,
+    'max_run_seconds' => 3600,    // 0 = 不限制
+    'max_lost_runs' => 3,
     'recover' => [
         'enable' => true,         // 随服务启动 queue-serial-recover 巡检进程
         'interval' => 30,

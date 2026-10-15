@@ -34,8 +34,8 @@ class SerialRecoverCommand extends HyperfCommand
 
         $rows = [];
         foreach ($stats as $name => $item) {
-            $rows[] = [$name, $item['checked'], $item['recovered'], $item['removed']];
+            $rows[] = [$name, $item['checked'], $item['recovered'], $item['removed'], $item['woken']];
         }
-        $this->table(['queue', 'checked', 'recovered', 'removed'], $rows);
+        $this->table(['queue', 'checked', 'recovered', 'removed', 'woken'], $rows);
     }
 }
