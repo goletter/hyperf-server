@@ -27,15 +27,27 @@ use Throwable;
  */
 class SerialJob extends Job
 {
-    /**
-     * @param string $slot concurrency slot already granted by the FIFO slot queue
-     */
+    // Declared with defaults (not constructor-promoted) so messages serialized by older versions,
+    // which lack newer properties, still unserialize into initialized properties.
+    public string $key = '';
+
+    public string $queue = QueueService::QUEUE_DEFAULT;
+
+    public string $token = '';
+
+    /** Concurrency slot already granted by the FIFO slot queue. */
+    public string $slot = '';
+
     public function __construct(
-        public string $key,
-        public string $queue = QueueService::QUEUE_DEFAULT,
-        public string $token = '',
-        public string $slot = '',
+        string $key,
+        string $queue = QueueService::QUEUE_DEFAULT,
+        string $token = '',
+        string $slot = '',
     ) {
+        $this->key = $key;
+        $this->queue = $queue;
+        $this->token = $token;
+        $this->slot = $slot;
     }
 
     public function handle(): void
