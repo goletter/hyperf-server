@@ -71,14 +71,38 @@ $queue->chain([
     new Step1Job($id),
     new Step2Job($id),
 ], 'ms', 200);
+
+// 每步失败最多执行 3 次（间隔同 $delay），仍失败则中断；返回链 ID
+$chainId = $queue->chain([
+    new Step1Job($id),
+    new Step2Job($id),
+], 'default', 5, 3);
 ```
 
 实现要点：
 
-- 入口只入队一个 `ChainJob`；当前步在同一次消费中执行，成功后再 `push` 剩余链
+- 所有步骤一次性原子写入 Redis 列表 `queue-serial:{chain:xxx}:waiting`，由 `SerialJob` 逐步执行，复用串行队列的 runner 租约、续租和巡检
+- worker 被杀、投递失败后，租约到期由巡检进程 `queue-serial-recover` 自动续跑；被恢复的那一步可能重复执行，步骤需幂等
+- 某步失败（达到 `$maxAttempts`）后链中断，剩余步骤（含失败那步）转入失败列表，默认保留 7 天（`queue_serial.chain.failed_ttl_seconds`）
+- 修复问题后可从失败的那一步重跑，已成功的步骤不会再执行：
+
+```php
+$queue->failedChains();            // 失败链列表：id / queue / steps / error / failed_at
+$queue->retryChain($chainId);      // 从失败那步重跑（该步执行次数重新计算）
+$queue->forgetFailedChain($chainId);
+```
+
+```bash
+php bin/hyperf.php queue:chain-failed                 # 列表
+php bin/hyperf.php queue:chain-failed --retry=chain:xxx
+php bin/hyperf.php queue:chain-failed --retry-all
+php bin/hyperf.php queue:chain-failed --forget=chain:xxx
+```
+
+- 队列消息只带链 ID，长链也不会让每条消息越来越大
 - 与 `pushBatch` 不同：`chain` 串行，`pushBatch` 并行
-- `ChainJob` 本身不重试（`maxAttempts = 0`），避免失败重试导致链被重复推进
 - 链内 Job 须可序列化（勿放入 Container、闭包、PDO 等）
+- 旧版本入队的 `ChainJob` 仍可正常消费
 
 ### 按 key 串行 pushSerial（陆续入队）
 
@@ -134,6 +158,9 @@ return [
         'enable' => true,         // 随服务启动 queue-serial-recover 巡检进程
         'interval' => 30,
         'idle_seconds' => 60,
+    ],
+    'chain' => [
+        'failed_ttl_seconds' => 604800, // 失败链保留时长，0 = 永久
     ],
 ];
 ```

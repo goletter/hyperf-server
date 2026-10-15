@@ -10,6 +10,7 @@ declare(strict_types=1);
  */
 namespace Goletter\Server;
 
+use Goletter\Server\Commands\ChainFailedCommand;
 use Goletter\Server\Commands\MakeModuleCommand;
 use Goletter\Server\Commands\SerialRecoverCommand;
 use Goletter\Server\Process\SerialRecoverProcess;
@@ -23,6 +24,7 @@ class ConfigProvider
             'commands' => [
                 MakeModuleCommand::class,
                 SerialRecoverCommand::class,
+                ChainFailedCommand::class,
             ],
             'processes' => [
                 SerialRecoverProcess::class,

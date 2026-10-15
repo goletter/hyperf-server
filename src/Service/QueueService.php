@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Goletter\Server\Service;
 
 use Goletter\Server\BaseService;
-use Goletter\Server\Job\ChainJob;
 use Goletter\Server\Job\QueueableJob;
 use Goletter\Server\Job\SerialJob;
 use Goletter\Server\Job\TraceableJob;
@@ -85,22 +84,52 @@ class QueueService extends BaseService
     }
 
     /**
-     * 任务链：按顺序执行，上一步成功后才入队下一步；任一步失败则中断后续。
+     * 任务链：按顺序执行，上一步成功后才执行下一步；某步失败（重试耗尽）则中断，
+     * 剩余步骤转入失败列表，可用 retryChain() 从失败的那一步重跑。
      *
-     * $delay 单位与对应队列驱动一致（default 一般为秒，ms 池为毫秒）。
+     * 步骤整体存入 Redis，复用串行队列的 runner 租约与巡检：worker 被杀、投递失败后会自动续跑。
+     * 被恢复的那一步可能重复执行，步骤需幂等。
+     *
+     * $delay：每步成功后到下一步的间隔，失败重试的间隔也用它（单位与队列驱动一致：default 秒，ms 池毫秒）。
+     * $maxAttempts：每步最多执行次数（含首次），默认 1 = 失败即中断。
      *
      * @param JobInterface[] $jobs
+     * @return string 链 ID（串行 key）
      */
-    public function chain(array $jobs, ?string $queue = null, int $delay = 0): bool
+    public function chain(array $jobs, ?string $queue = null, int $delay = 0, int $maxAttempts = 1): string
     {
         if ($jobs === []) {
             throw new InvalidArgumentException('Job chain must contain at least one job.');
         }
 
         $jobs = array_values($jobs);
-        $queue = $this->resolveQueue($jobs[0], $queue);
+        foreach ($jobs as $index => $job) {
+            if (! $job instanceof JobInterface) {
+                throw new InvalidArgumentException(sprintf(
+                    'Chain job at index %d must implement %s.',
+                    $index,
+                    JobInterface::class
+                ));
+            }
+        }
 
-        return $this->push(new ChainJob(array_values($jobs), $queue, max(0, $delay)), $queue, 0);
+        $queue = $this->resolveQueue($jobs[0], $queue);
+        $key = 'chain:' . $this->newSerialToken();
+
+        $payloads = [];
+        foreach ($jobs as $job) {
+            $payloads[] = serialize([
+                'job' => $this->withTrace($job),
+                'delay' => max(0, $delay),
+                'attempts' => 0,
+                'maxAttempts' => max(1, $maxAttempts),
+                'stopOnFailure' => true,
+            ]);
+        }
+
+        $this->enqueueSerial($key, $queue, $payloads);
+
+        return $key;
     }
 
     /**
@@ -126,43 +155,205 @@ class QueueService extends BaseService
 
         $queue = $this->resolveQueue($job, $queue);
 
-        $payload = serialize([
+        $this->enqueueSerial($key, $queue, [serialize([
             'job' => $this->withTrace($job),
             'delay' => max(0, $delay),
             'attempts' => 0,
             'maxAttempts' => max(1, $maxAttempts),
-        ]);
+        ])]);
+
+        return true;
+    }
+
+    /**
+     * 原子地追加条目并尝试抢 runner 租约，抢到则投递 runner。
+     *
+     * @param string[] $payloads
+     */
+    private function enqueueSerial(string $key, string $queue, array $payloads): void
+    {
         $token = $this->newSerialToken();
+        $redis = $this->redis($queue);
+
+        // 先登记再入队：进程在两步之间挂掉也能被巡检发现；空列表的登记会在 idle_seconds 后被清理
+        $redis->zAdd($this->serialRegistryKey($queue), time(), $key);
 
         $script = <<<'LUA'
-redis.call('RPUSH', KEYS[1], ARGV[1])
-if redis.call('SET', KEYS[2], ARGV[2], 'NX', 'PX', ARGV[3]) then
+for i = 3, #ARGV do
+  redis.call('RPUSH', KEYS[1], ARGV[i])
+end
+if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) then
   return 1
 end
 return 0
 LUA;
 
-        $redis = $this->redis($queue);
         $acquired = (int) $redis->eval(
             $script,
-            [
-                $this->serialWaitingKey($key),
-                $this->serialRunnerKey($key),
-                $payload,
-                $token,
-                (string) $this->serialRunnerLeaseMs(),
-            ],
+            array_merge(
+                [
+                    $this->serialWaitingKey($key),
+                    $this->serialRunnerKey($key),
+                    $token,
+                    (string) $this->serialRunnerLeaseMs(),
+                ],
+                $payloads
+            ),
             2
         );
-
-        // 必须在 RPUSH 之后写入，巡检据 score 判断空闲 key 能否移出登记表
-        $redis->zAdd($this->serialRegistryKey($queue), time(), $key);
 
         if ($acquired === 1) {
             $this->startSerialRunner($key, $queue, $token);
         }
+    }
+
+    /**
+     * 失败的任务链列表（最近失败的在前）。已过期（failed_ttl_seconds）的记录会被顺带清理。
+     *
+     * @return array<int, array{id: string, queue: string, steps: int, error: string, exception: string, failed_at: string}>
+     */
+    public function failedChains(?string $queue = null, int $limit = 100): array
+    {
+        $result = [];
+        foreach ($this->serialQueues($queue) as $name) {
+            $redis = $this->redis($name);
+            $registryKey = $this->chainFailedRegistryKey($name);
+            $infoKey = $this->chainFailedInfoKey($name);
+
+            $ids = (array) $redis->zRevRange($registryKey, 0, max(1, $limit) - 1);
+            foreach ($ids as $id) {
+                $id = (string) $id;
+                $steps = (int) $redis->lLen($this->serialFailedKey($id));
+                if ($steps === 0) {
+                    $redis->zRem($registryKey, $id);
+                    $redis->hDel($infoKey, $id);
+                    continue;
+                }
+
+                $info = json_decode((string) $redis->hGet($infoKey, $id), true) ?: [];
+                $result[] = [
+                    'id' => $id,
+                    'queue' => $name,
+                    'steps' => $steps,
+                    'error' => (string) ($info['error'] ?? ''),
+                    'exception' => (string) ($info['exception'] ?? ''),
+                    'failed_at' => (string) ($info['failed_at'] ?? ''),
+                ];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * 从失败的那一步重新执行任务链（该步执行次数重新计算）。
+     *
+     * @return bool false 表示没有找到该失败链，或该链已在执行中
+     */
+    public function retryChain(string $chainId, ?string $queue = null): bool
+    {
+        $queue ??= $this->findFailedChainQueue($chainId);
+        if ($queue === null) {
+            return false;
+        }
+
+        $redis = $this->redis($queue);
+        $token = $this->newSerialToken();
+        $redis->zAdd($this->serialRegistryKey($queue), time(), $chainId);
+
+        $script = <<<'LUA'
+if redis.call('EXISTS', KEYS[3]) == 0 then
+  return -1
+end
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return -2
+end
+redis.call('RENAME', KEYS[3], KEYS[1])
+redis.call('PERSIST', KEYS[1])
+if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) then
+  return 1
+end
+return 0
+LUA;
+
+        $result = (int) $redis->eval(
+            $script,
+            [
+                $this->serialWaitingKey($chainId),
+                $this->serialRunnerKey($chainId),
+                $this->serialFailedKey($chainId),
+                $token,
+                (string) $this->serialRunnerLeaseMs(),
+            ],
+            3
+        );
+
+        if ($result < 0) {
+            return false;
+        }
+
+        $redis->zRem($this->chainFailedRegistryKey($queue), $chainId);
+        $redis->hDel($this->chainFailedInfoKey($queue), $chainId);
+
+        if ($result === 1) {
+            $this->startSerialRunner($chainId, $queue, $token);
+        }
 
         return true;
+    }
+
+    /**
+     * 删除失败任务链的记录与剩余步骤。
+     */
+    public function forgetFailedChain(string $chainId, ?string $queue = null): bool
+    {
+        $queue ??= $this->findFailedChainQueue($chainId);
+        if ($queue === null) {
+            return false;
+        }
+
+        $redis = $this->redis($queue);
+        $redis->del($this->serialFailedKey($chainId));
+        $redis->hDel($this->chainFailedInfoKey($queue), $chainId);
+
+        return (int) $redis->zRem($this->chainFailedRegistryKey($queue), $chainId) > 0;
+    }
+
+    /**
+     * @internal used by SerialJob
+     */
+    public function recordFailedChain(string $chainId, string $queue, Throwable $e): void
+    {
+        $redis = $this->redis($queue);
+        $redis->hSet($this->chainFailedInfoKey($queue), $chainId, json_encode([
+            'error' => mb_substr($e->getMessage(), 0, 1000),
+            'exception' => $e::class,
+            'failed_at' => date('Y-m-d H:i:s'),
+        ], JSON_UNESCAPED_UNICODE));
+        $redis->zAdd($this->chainFailedRegistryKey($queue), time(), $chainId);
+    }
+
+    private function findFailedChainQueue(string $chainId): ?string
+    {
+        foreach ($this->serialQueues(null) as $name) {
+            if ($this->redis($name)->zScore($this->chainFailedRegistryKey($name), $chainId) !== false) {
+                return $name;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function serialQueues(?string $queue): array
+    {
+        if ($queue !== null) {
+            return [$queue];
+        }
+
+        return array_map('strval', array_keys((array) $this->config->get('async_queue', [])));
     }
 
     /**
@@ -184,7 +375,7 @@ LUA;
      */
     public function recoverSerial(?string $queue = null, int $idleSeconds = 60): array
     {
-        $queues = $queue !== null ? [$queue] : array_keys((array) $this->config->get('async_queue', []));
+        $queues = $this->serialQueues($queue);
 
         $recoverScript = <<<'LUA'
 if redis.call('LLEN', KEYS[1]) == 0 then
@@ -276,6 +467,38 @@ LUA;
     public function serialRunnerKey(string $key): string
     {
         return 'queue-serial:{' . $key . '}:runner';
+    }
+
+    /**
+     * 失败任务链的剩余步骤（队头为失败的那一步）。
+     */
+    public function serialFailedKey(string $key): string
+    {
+        return 'queue-serial:{' . $key . '}:failed';
+    }
+
+    /**
+     * 失败任务链登记表（zset，score 为失败时间）。
+     */
+    public function chainFailedRegistryKey(string $queue): string
+    {
+        return 'queue-serial:failed:' . $queue;
+    }
+
+    /**
+     * 失败任务链的错误信息（hash，field 为链 ID）。
+     */
+    public function chainFailedInfoKey(string $queue): string
+    {
+        return 'queue-serial:failed-info:' . $queue;
+    }
+
+    /**
+     * 失败任务链保留时长（秒），0 = 永久保留。
+     */
+    public function chainFailedTtlSeconds(): int
+    {
+        return max(0, (int) ($this->config->get('queue_serial.chain.failed_ttl_seconds') ?? 604800));
     }
 
     /**
@@ -405,7 +628,8 @@ LUA;
     /**
      * 原子地推进串行队列，并决定是否需要投递下一个 runner。
      *
-     * $mode：pop 弹出队头；keep 保留队头；replace 用 $headPayload 覆盖队头（失败重试）。
+     * $mode：pop 弹出队头；keep 保留队头；replace 用 $headPayload 覆盖队头（失败重试）；
+     *        clear 清空整个列表；fail 用 $headPayload 覆盖队头后把整个列表移到失败列表（任务链中断，可重跑）。
      * 返回：-1 已失去执行权；0 队列已空、租约已释放；1 需以 $nextToken 投递下一个 runner。
      *
      * @internal used by SerialJob
@@ -427,6 +651,16 @@ if ARGV[3] == 'pop' then
   redis.call('LPOP', KEYS[1])
 elseif ARGV[3] == 'replace' and redis.call('LLEN', KEYS[1]) > 0 then
   redis.call('LSET', KEYS[1], 0, ARGV[5])
+elseif ARGV[3] == 'clear' then
+  redis.call('DEL', KEYS[1])
+elseif ARGV[3] == 'fail' and redis.call('LLEN', KEYS[1]) > 0 then
+  if ARGV[5] ~= '' then
+    redis.call('LSET', KEYS[1], 0, ARGV[5])
+  end
+  redis.call('RENAME', KEYS[1], KEYS[3])
+  if tonumber(ARGV[6]) > 0 then
+    redis.call('EXPIRE', KEYS[3], ARGV[6])
+  end
 end
 if redis.call('LLEN', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[2])
@@ -441,13 +675,15 @@ LUA;
             [
                 $this->serialWaitingKey($key),
                 $this->serialRunnerKey($key),
+                $this->serialFailedKey($key),
                 $token,
                 $nextToken,
                 $mode,
                 (string) ($this->serialRunnerLeaseMs() + max(0, $nextDelayMs)),
                 $headPayload,
+                (string) $this->chainFailedTtlSeconds(),
             ],
-            2
+            3
         );
     }
 

@@ -15,6 +15,9 @@ use InvalidArgumentException;
  *
  * Failure stops the chain (remaining jobs are not pushed). The wrapper itself does
  * not retry (maxAttempts = 0) to avoid double-advancing the chain.
+ *
+ * @deprecated QueueService::chain() now stores steps in Redis and runs them via SerialJob;
+ *             kept so chains enqueued by older versions can still be consumed.
  */
 class ChainJob extends Job
 {

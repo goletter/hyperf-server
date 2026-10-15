@@ -20,7 +20,8 @@ use Throwable;
  * so stale copies (re-queued from timeout / failed lists, duplicated deliveries) become no-ops.
  *
  * On business-job failure: retry the same head after its delay until maxAttempts is reached,
- * then drop the head and continue with the next job.
+ * then drop the head and continue with the next job — or, for chain steps (stopOnFailure), move the remaining
+ * steps to the failed list so the chain can be retried from the failed step.
  *
  * A global concurrency slot prevents too many serial keys from running at once (FD / resource storm).
  */
@@ -75,7 +76,7 @@ class SerialJob extends Job
         $maxAttempts = $entry['maxAttempts'];
 
         if (! $job instanceof JobInterface) {
-            $this->handOver($queueService, $runToken, 'pop', 0);
+            $this->handOver($queueService, $runToken, $entry['stopOnFailure'] ? 'clear' : 'pop', 0);
             throw new RuntimeException(sprintf(
                 'Serial waiting list "%s" contains a non-JobInterface payload.',
                 $this->key
@@ -92,11 +93,29 @@ class SerialJob extends Job
                     'delay' => $delay,
                     'attempts' => $attempts,
                     'maxAttempts' => $maxAttempts,
+                    'stopOnFailure' => $entry['stopOnFailure'],
                 ]));
                 return;
             }
 
-            $this->handOver($queueService, $runToken, 'pop', $delay);
+            if (! $entry['stopOnFailure']) {
+                $this->handOver($queueService, $runToken, 'pop', $delay);
+                throw $e;
+            }
+
+            $result = $this->handOver($queueService, $runToken, 'fail', 0, serialize([
+                'job' => $job,
+                'delay' => $delay,
+                'attempts' => 0,
+                'maxAttempts' => $maxAttempts,
+                'stopOnFailure' => true,
+            ]));
+            if ($result !== -1) {
+                try {
+                    $queueService->recordFailedChain($this->key, $this->queue, $e);
+                } catch (Throwable) {
+                }
+            }
             throw $e;
         }
 
@@ -106,7 +125,7 @@ class SerialJob extends Job
     /**
      * Atomically advance the waiting list and, if anything is left, pass the lease to the next SerialJob.
      */
-    private function handOver(QueueService $queueService, string $runToken, string $mode, int $delay, string $headPayload = ''): void
+    private function handOver(QueueService $queueService, string $runToken, string $mode, int $delay, string $headPayload = ''): int
     {
         $nextToken = $queueService->newSerialToken();
         $result = $queueService->advanceSerial(
@@ -122,6 +141,8 @@ class SerialJob extends Job
         if ($result === 1) {
             $queueService->startSerialRunner($this->key, $this->queue, $nextToken, $delay);
         }
+
+        return $result;
     }
 
     /**
@@ -156,7 +177,7 @@ class SerialJob extends Job
     }
 
     /**
-     * @return array{job: mixed, delay: int, attempts: int, maxAttempts: int}
+     * @return array{job: mixed, delay: int, attempts: int, maxAttempts: int, stopOnFailure: bool}
      */
     private function unpack(string $payload): array
     {
@@ -167,6 +188,7 @@ class SerialJob extends Job
                 'delay' => 0,
                 'attempts' => 0,
                 'maxAttempts' => 1,
+                'stopOnFailure' => false,
             ];
         }
         if (is_array($data) && isset($data['job'])) {
@@ -175,6 +197,7 @@ class SerialJob extends Job
                 'delay' => max(0, (int) ($data['delay'] ?? 0)),
                 'attempts' => max(0, (int) ($data['attempts'] ?? 0)),
                 'maxAttempts' => max(1, (int) ($data['maxAttempts'] ?? 1)),
+                'stopOnFailure' => (bool) ($data['stopOnFailure'] ?? false),
             ];
         }
 
@@ -183,6 +206,7 @@ class SerialJob extends Job
             'delay' => 0,
             'attempts' => 0,
             'maxAttempts' => 1,
+            'stopOnFailure' => false,
         ];
     }
 }

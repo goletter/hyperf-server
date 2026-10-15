@@ -25,4 +25,9 @@ return [
         // Keys with an empty waiting list and no push for this long are dropped from the registry.
         'idle_seconds' => 60,
     ],
+
+    'chain' => [
+        // How long failed chains are kept for retry (seconds, 0 = forever).
+        'failed_ttl_seconds' => 604800,
+    ],
 ];
