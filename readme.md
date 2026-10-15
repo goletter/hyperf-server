@@ -109,12 +109,14 @@ $queue->serialWaitingCount('user:1001');
 
 实现要点：
 
-- 任务写入 Redis List `{queue-serial}:{key}:waiting`；列表从空变为 1 时启动 runner（首个立即执行）
+- 任务写入 Redis List `queue-serial:{key}:waiting`；同 key 由 runner 租约 `queue-serial:{key}:runner` 保证同一时刻只有一个 `SerialJob` 在跑（入队与抢租约在同一段 Lua 里，原子）
+- 每次执行都会轮换租约令牌，被 reload 回来的旧 `SerialJob` 或重复投递的副本直接空转，不会重复执行
+- 执行期间每 1/3 租约周期自动续租；worker 被杀导致 runner 丢失时，租约到期后由下一次 `pushSerial` 或巡检进程重新拉起
 - `$delay`：成功后到下一条的间隔；失败且未达上限时，也是**重试同一条**的间隔
 - `$maxAttempts`：本条最多执行次数（默认 `1` = 失败不重试，直接丢弃并继续下一条）
 - 重试耗尽后丢弃本条并继续后续，避免堵死同 key
 - 外层 `SerialJob` 不依赖 async-queue 重试（避免双调度）
-- **全局并发**：默认最多 32 个 `SerialJob` 同时跑（跨 key）；满了会 `busy_delay` 后再抢槽，减轻「Too many open files」
+- **全局并发**：默认最多 32 个 `SerialJob` 同时跑（跨 key）；满了会 `busy_delay_ms` 后再抢槽（自动换算为秒或毫秒队列的单位），减轻「Too many open files」
 
 ```bash
 php bin/hyperf.php vendor:publish goletter/hyperf-server
@@ -124,10 +126,23 @@ php bin/hyperf.php vendor:publish goletter/hyperf-server
 
 ```php
 return [
-    'max_concurrent' => 32,   // 0 = 不限制
-    'busy_delay' => 1,
+    'max_concurrent' => 32,       // 0 = 不限制
+    'busy_delay_ms' => 1000,
     'slot_lease_seconds' => 600,
+    'runner_lease_seconds' => 300,
+    'recover' => [
+        'enable' => true,         // 随服务启动 queue-serial-recover 巡检进程
+        'interval' => 30,
+        'idle_seconds' => 60,
+    ],
 ];
+```
+
+手动巡检：
+
+```bash
+php bin/hyperf.php queue:serial-recover            # 全部队列
+php bin/hyperf.php queue:serial-recover --queue=ms
 ```
 
 数据量大时建议同时：调低 `async_queue.*.concurrent.limit`、提高进程 `ulimit -n`、日志尽量打 stdout/stderr（避免每条日志抢文件句柄）。
