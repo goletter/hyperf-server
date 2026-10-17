@@ -86,10 +86,23 @@ $queue->chain("user:{$userId}", [
 ], null, 10);
 
 // 步间隔 10 秒；本链结束后隔 60 秒再开始同 key 的下一条链
-$queue->chain("user:{$userId}", [$a, $b], null, 10, 60);
+$queue->chain("user:{$userId}", [
+    new CreateOrderJob($dto),
+    new DeductStockJob($dto),
+], null, 10, 60);
+
+// 整链步间隔 10 秒；扣库存成功后隔 60 秒再发通知，扣库存失败重试也是 60
+$queue->chain("user:{$userId}", [
+    new CreateOrderJob($dto),
+    ['job' => new DeductStockJob($dto), 'delay' => 60],
+    new SendNotifyJob($dto),
+], null, 10);
 
 // 再加上每步失败最多执行 3 次
-$queue->chain("user:{$userId}", [$a, $b], null, 10, 60, 3);
+$queue->chain("user:{$userId}", [
+    new CreateOrderJob($dto),
+    new DeductStockJob($dto),
+], null, 10, 60, 3);
 ```
 
 带 key 时：
@@ -100,6 +113,7 @@ $queue->chain("user:{$userId}", [$a, $b], null, 10, 60, 3);
 
 实现要点：
 
+- `$delay` 是整链每一步的间隔；某一步写成 `['job' => new DeductStockJob($dto), 'delay' => 60]` 时只覆盖该步（含它的失败重试），其余步骤仍用 `$delay`。最后一步结束之后仍按 `$chainDelay` 开始下一条链
 - 所有步骤一次性原子写入 Redis 列表 `queue-serial:{chain:xxx}:waiting`，由 `SerialJob` 逐步执行，复用串行队列的 runner 租约、续租和巡检
 - worker 被杀、投递失败后，租约到期由巡检进程 `queue-serial-recover` 自动续跑；被恢复的那一步可能重复执行，步骤需幂等
 - 某步失败（达到 `$maxAttempts`）后链中断，剩余步骤（含失败那步）转入失败列表，默认保留 7 天（`queue_serial.chain.failed_ttl_seconds`）

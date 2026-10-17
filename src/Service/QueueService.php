@@ -93,13 +93,14 @@ class QueueService extends BaseService
      * $key：相同 key 的多条链按入队顺序排队执行（与同 key 的 pushSerial 共用一条队列），不同 key 并发；
      *       空字符串表示独立执行。某条链失败只移走它自己的剩余步骤，同 key 后面的链继续执行。
      * $delay：每步成功后到下一步的间隔，失败重试的间隔也用它（单位与队列驱动一致：default 秒，ms 池毫秒）。
+     *        整链共用这一个值；某一步写成 ['job' => $job, 'delay' => 间隔] 时只覆盖该步，没写 delay 的步骤仍用这个值。
      * $chainDelay：本链结束（全部成功或失败中断）后，同 key 下一条链开始前的间隔（单位同 $delay）；不带 key 时无意义。
      * $maxAttempts：每步最多执行次数（含首次），默认 1 = 失败即中断。
      *
      * 兼容旧写法 chain($jobs, $queue, $delay, $maxAttempts)。
      *
-     * @param JobInterface[]|string $key
-     * @param null|JobInterface[]|string $jobs
+     * @param JobInterface[]|array<int, JobInterface|array{job: JobInterface, delay?: int}>|string $key
+     * @param null|JobInterface[]|array<int, JobInterface|array{job: JobInterface, delay?: int}>|string $jobs
      * @return string 链 ID，用于 retryChain() / forgetFailedChain()
      */
     public function chain(
@@ -123,29 +124,49 @@ class QueueService extends BaseService
             throw new InvalidArgumentException('Job chain must contain at least one job.');
         }
 
-        $jobs = array_values($jobs);
-        foreach ($jobs as $index => $job) {
-            if (! $job instanceof JobInterface) {
+        $steps = [];
+        foreach (array_values($jobs) as $index => $job) {
+            $stepDelay = $delay;
+            if (is_array($job)) {
+                if (! isset($job['job']) || ! $job['job'] instanceof JobInterface) {
+                    throw new InvalidArgumentException(sprintf(
+                        'Chain job at index %d must implement %s.',
+                        $index,
+                        JobInterface::class
+                    ));
+                }
+                if (array_key_exists('delay', $job)) {
+                    if (! is_int($job['delay'])) {
+                        throw new InvalidArgumentException(sprintf(
+                            'Chain job delay at index %d must be an int.',
+                            $index
+                        ));
+                    }
+                    $stepDelay = $job['delay'];
+                }
+                $job = $job['job'];
+            } elseif (! $job instanceof JobInterface) {
                 throw new InvalidArgumentException(sprintf(
                     'Chain job at index %d must implement %s.',
                     $index,
                     JobInterface::class
                 ));
             }
+            $steps[] = ['job' => $job, 'delay' => max(0, $stepDelay)];
         }
 
-        $queue = $this->resolveQueue($jobs[0], $queue);
+        $queue = $this->resolveQueue($steps[0]['job'], $queue);
         $chainId = 'chain:' . $this->newSerialToken();
         if ($key === '') {
             $key = $chainId;
         }
 
-        $total = count($jobs);
+        $total = count($steps);
         $payloads = [];
-        foreach ($jobs as $step => $job) {
+        foreach ($steps as $step => $item) {
             $payloads[] = serialize([
-                'job' => $this->withTrace($job),
-                'delay' => max(0, $delay),
+                'job' => $this->withTrace($item['job']),
+                'delay' => $item['delay'],
                 'attempts' => 0,
                 'maxAttempts' => max(1, $maxAttempts),
                 'stopOnFailure' => true,
