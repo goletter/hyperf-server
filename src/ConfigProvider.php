@@ -38,6 +38,12 @@ class ConfigProvider
                     'source' => __DIR__ . '/../publish/queue_serial.php',
                     'destination' => BASE_PATH . '/config/autoload/queue_serial.php',
                 ],
+                [
+                    'id' => 'rate_limit',
+                    'description' => 'HTTP rate limit middleware config.',
+                    'source' => __DIR__ . '/../publish/rate_limit.php',
+                    'destination' => BASE_PATH . '/config/autoload/rate_limit.php',
+                ],
             ],
         ];
     }

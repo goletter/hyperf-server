@@ -13,7 +13,7 @@ composer require goletter/hyperf-server
 | 模块 | 说明 |
 |------|------|
 | `Router` | 扩展 Hyperf Router，提供 `apiResource` |
-| Middleware | CORS、Trace、Locale、幂等、响应格式化、模型绑定等 |
+| Middleware | CORS、Trace、Locale、幂等、限流、响应格式化、模型绑定等 |
 | `QueueService` | 异步队列推送 / 批量 / 任务链 / **按 key 串行**，自动透传 `trace_id` |
 | Casts | `Encrypted`、`JsonArrayCast`、`ResourceUrl` 等 |
 | `MakeModuleCommand` | 模块脚手架命令 |
@@ -218,6 +218,63 @@ $status = $queue->getAsyncQueueCompleted('default');
 ```
 
 会统计 `waiting`、`delayed` 以及 Redis `reserved`（官方 `info()` 不含 reserved）。
+
+## 限流 RateLimitMiddleware
+
+固定窗口 + Redis。默认关闭，发布配置后打开开关，并挂到 HTTP 中间件。
+
+```bash
+php bin/hyperf.php vendor:publish goletter/hyperf-server
+```
+
+```php
+// config/autoload/middlewares.php
+use Goletter\Server\Middleware\RateLimitMiddleware;
+
+return [
+    'http' => [
+        RateLimitMiddleware::class,
+    ],
+];
+```
+
+```env
+RATE_LIMIT_ENABLE=true
+RATE_LIMIT_MAX=120
+RATE_LIMIT_WINDOW=60
+RATE_LIMIT_DIMENSION=ip
+RATE_LIMIT_FAIL_OPEN=true
+# 仅在可信网关后打开，否则客户端可伪造 IP
+RATE_LIMIT_USE_FORWARDED=false
+```
+
+`config/autoload/rate_limit.php` 里按前缀覆盖（更长前缀优先）：
+
+```php
+'rules' => [
+    [
+        'path_prefix' => '/api/auth/login',
+        'max' => 10,
+        'window' => 60,
+        'dimension' => 'ip',
+        'methods' => ['POST'],
+    ],
+    [
+        'path_prefix' => '/api',
+        'max' => 60,
+        'window' => 60,
+        'dimension' => 'user', // 读 request attribute user_id / uid，没有则按 IP
+    ],
+],
+```
+
+| dimension | 计数范围 |
+|-----------|----------|
+| `ip` | 同一 IP，在该规则前缀下共用额度 |
+| `user` | 同一用户；未登录回退 IP |
+| `ip_path` / `user_path` | 再按完整路径拆开 |
+
+超限返回 `429`，带 `Retry-After`、`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`。`/health`、`/metrics`、`/favicon.ico` 默认不计数。Redis 故障时 `fail_open=true` 放行，否则 `503`。
 
 ## 路由 apiResource
 
