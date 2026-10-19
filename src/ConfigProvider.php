@@ -34,7 +34,7 @@ class ConfigProvider
             'publish' => [
                 [
                     'id' => 'queue_serial',
-                    'description' => 'Serial queue (pushSerial) concurrency config.',
+                    'description' => '串行队列（pushSerial）并发配置。',
                     'source' => __DIR__ . '/../publish/queue_serial.php',
                     'destination' => BASE_PATH . '/config/autoload/queue_serial.php',
                 ],
