@@ -3,9 +3,10 @@ declare(strict_types=1);
 
 namespace {{namespace}};
 
-use Hyperf\Di\Annotation\Inject;
-use App\Service\{{service}};
+use App\Controller\AbstractController;
 use App\Model\{{model}};
+use App\Service\{{service}};
+use Hyperf\Di\Annotation\Inject;
 
 class {{class}} extends AbstractController
 {
