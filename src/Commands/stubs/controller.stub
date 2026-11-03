@@ -8,31 +8,55 @@ use App\Model\{{model}};
 use App\Service\{{service}};
 use Hyperf\Di\Annotation\Inject;
 
+/**
+  * @desc {{desc}}
+  * @author {{author}} {{date}}
+  */
 class {{class}} extends AbstractController
 {
     #[Inject]
     private {{service}} $service;
 
+    /**
+      * @desc {{desc}}列表
+      * @author {{author}} {{date}}
+      */
     public function index()
     {
         return $this->collection($this->service->paginate($this->request->all()));
     }
 
+    /**
+      * @desc {{desc}}详情
+      * @author {{author}} {{date}}
+      */
     public function show({{model}} ${{modelName}})
     {
         return $this->success(${{modelName}});
     }
 
+    /**
+      * @desc {{desc}}添加
+      * @author {{author}} {{date}}
+      */
     public function store()
     {
         return $this->success($this->service->create($this->request->all()));
     }
 
+    /**
+      * @desc {{desc}}更新
+      * @author {{author}} {{date}}
+      */
     public function update({{model}} ${{modelName}})
     {
         return $this->success($this->service->update(${{modelName}}, $this->request->all()));
     }
 
+    /**
+      * @desc {{desc}}删除
+      * @author {{author}} {{date}}
+      */
     public function destroy({{model}} ${{modelName}})
     {
         $this->service->delete(${{modelName}});
