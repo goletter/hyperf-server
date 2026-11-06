@@ -35,7 +35,7 @@ class MakeModuleCommand extends HyperfCommand
     public function configure()
     {
         parent::configure();
-        $this->setDescription('生成 Model + Service + Controller + Resource + Filter 五层结构')
+        $this->setDescription('生成 Model + Service + Controller + Request + Resource + Filter 六层结构')
             ->addArgument('name', InputArgument::REQUIRED, '模块名（如 User）')
             ->addOption(
                 'api-version',
@@ -60,6 +60,7 @@ class MakeModuleCommand extends HyperfCommand
 
         $this->makeModel($name);
         $this->makeService($name);
+        $this->makeRequest($name);
         $this->makeController($name);
         $this->makeResource($name);
         $this->makeFilter($name);
@@ -127,8 +128,10 @@ class MakeModuleCommand extends HyperfCommand
     protected function makeController(string $name)
     {
         [$namespace, $relativeDir] = $this->versionedNamespace('Controller');
+        [$requestNamespace] = $this->versionedNamespace('Request');
         $class = "{$name}Controller";
         $service = "{$name}Service";
+        $request = "{$name}Request";
         $modeName = Str::camel($name);
         $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
 
@@ -147,6 +150,8 @@ class MakeModuleCommand extends HyperfCommand
                 '{{service}}',
                 '{{model}}',
                 '{{modelName}}',
+                '{{requestNamespace}}',
+                '{{request}}',
                 '{{desc}}',
                 '{{author}}',
                 '{{date}}',
@@ -157,6 +162,8 @@ class MakeModuleCommand extends HyperfCommand
                 $service,
                 $name,
                 $modeName,
+                $requestNamespace,
+                $request,
                 $name,
                 'yong',
                 date('Y-m-d'),
@@ -166,6 +173,30 @@ class MakeModuleCommand extends HyperfCommand
 
         file_put_contents($path, $content);
         $this->info("✅ 创建 Controller: {$path}");
+    }
+
+    protected function makeRequest(string $name)
+    {
+        [$namespace, $relativeDir] = $this->versionedNamespace('Request');
+        $class = "{$name}Request";
+        $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
+
+        if (file_exists($path)) {
+            $this->warn("⚠️ Request 已存在: {$path}");
+            return;
+        }
+
+        $this->ensureDirectory(dirname($path));
+
+        $stub = file_get_contents(__DIR__ . '/stubs/request.stub');
+        $content = str_replace(
+            ['{{namespace}}', '{{class}}'],
+            [$namespace, $class],
+            $stub
+        );
+
+        file_put_contents($path, $content);
+        $this->info("✅ 创建 Request: {$path}");
     }
 
     protected function makeResource(string $name)

@@ -6,6 +6,7 @@ namespace {{namespace}};
 use App\Controller\AbstractController;
 use App\Model\{{model}};
 use App\Service\{{service}};
+use {{requestNamespace}}\{{request}};
 use Hyperf\Di\Annotation\Inject;
 
 /**
@@ -39,18 +40,18 @@ class {{class}} extends AbstractController
       * @desc {{desc}}添加
       * @author {{author}} {{date}}
       */
-    public function store()
+    public function store({{request}} $request)
     {
-        return $this->success($this->service->create($this->request->all()));
+        return $this->success($this->service->create($request->validated()));
     }
 
     /**
       * @desc {{desc}}更新
       * @author {{author}} {{date}}
       */
-    public function update({{model}} ${{modelName}})
+    public function update({{model}} ${{modelName}}, {{request}} $request)
     {
-        return $this->success($this->service->update(${{modelName}}, $this->request->all()));
+        return $this->success($this->service->update(${{modelName}}, $request->validated()));
     }
 
     /**
