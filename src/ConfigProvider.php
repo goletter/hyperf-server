@@ -10,6 +10,7 @@ declare(strict_types=1);
  */
 namespace Goletter\Server;
 
+use Goletter\Server\Commands\ApiCallStatsCommand;
 use Goletter\Server\Commands\ChainFailedCommand;
 use Goletter\Server\Commands\MakeModuleCommand;
 use Goletter\Server\Commands\SerialRecoverCommand;
@@ -23,6 +24,7 @@ class ConfigProvider
             'dependencies' => [],
             'commands' => [
                 MakeModuleCommand::class,
+                ApiCallStatsCommand::class,
                 SerialRecoverCommand::class,
                 ChainFailedCommand::class,
             ],

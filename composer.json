@@ -47,5 +47,8 @@
         "hyperf": {
             "config": "Goletter\\Server\\ConfigProvider"
         }
+    },
+    "suggest": {
+        "nesbot/carbon": "goletter:api-call-stats 命令解析日志时间需要"
     }
 }
