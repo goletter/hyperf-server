@@ -11,12 +11,16 @@ declare(strict_types=1);
  */
 namespace Goletter\Server\Commands;
 
+use Goletter\Server\Support\SqlCommentEnum;
 use Hyperf\Command\Annotation\Command;
 use Hyperf\Command\Command as HyperfCommand;
 use Hyperf\Stringable\Str;
+use PDO;
+use PDOException;
 use Psr\Container\ContainerInterface;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputOption;
+use Throwable;
 
 #[Command]
 class MakeModuleCommand extends HyperfCommand
@@ -102,10 +106,23 @@ class MakeModuleCommand extends HyperfCommand
 
         $this->ensureDirectory(dirname($path));
 
+        $columns = $this->resolveTableColumnMeta($name);
+        $constants = $this->buildEnumConstants($columns);
+        if ($constants !== '') {
+            $fields = [];
+            foreach ($columns as $field => $meta) {
+                $base = SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? ''));
+                if (SqlCommentEnum::tryParse((string) ($meta['comment'] ?? ''), $base) !== null) {
+                    $fields[] = $field;
+                }
+            }
+            $this->line(sprintf('   Model 枚举常量：%s', implode(', ', $fields)));
+        }
+
         $stub = file_get_contents(__DIR__ . '/stubs/model.stub');
         $content = str_replace(
-            ['{{namespace}}', '{{class}}'],
-            [$namespace, $name],
+            ['{{namespace}}', '{{class}}', '{{constants}}'],
+            [$namespace, $name, $constants],
             $stub
         );
 
@@ -377,18 +394,93 @@ class MakeModuleCommand extends HyperfCommand
     }
 
     /**
-     * 从 migrations 合并 create/alter，推断表字段及类型。
-     *
-     * @return array<string, string> column => blueprint method（string/integer/...）
+     * @return array<string, string> column => type
      */
     protected function resolveTableColumns(string $modelBase): array
+    {
+        $out = [];
+        foreach ($this->resolveTableColumnMeta($modelBase) as $field => $meta) {
+            $out[$field] = (string) ($meta['type'] ?? '');
+        }
+
+        return $out;
+    }
+
+    /**
+     * 优先读库表 COMMENT，失败则回退 migrations。
+     *
+     * @return array<string, array{type: string, comment: string}>
+     */
+    protected function resolveTableColumnMeta(string $modelBase): array
+    {
+        $table = Str::plural(Str::snake($modelBase));
+        if ($table === '') {
+            return [];
+        }
+
+        $fromDb = $this->fetchTableColumnsFromDb($table);
+        if ($fromDb !== []) {
+            return $fromDb;
+        }
+
+        return $this->parseMigrationColumnMeta($table);
+    }
+
+    /**
+     * @return array<string, array{type: string, comment: string}>
+     */
+    protected function fetchTableColumnsFromDb(string $table): array
+    {
+        try {
+            $host = (string) (env('DB_HOST') ?: '127.0.0.1');
+            $port = (string) (env('DB_PORT') ?: '3306');
+            $database = (string) (env('DB_DATABASE') ?: '');
+            $username = (string) (env('DB_USERNAME') ?: 'root');
+            $password = (string) (env('DB_PASSWORD') ?: '');
+            if ($database === '') {
+                return [];
+            }
+
+            $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4', $host, $port, $database);
+            $pdo = new PDO($dsn, $username, $password, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_TIMEOUT => 5,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            ]);
+            $stmt = $pdo->query('SHOW FULL COLUMNS FROM `' . str_replace('`', '``', $table) . '`');
+            if ($stmt === false) {
+                return [];
+            }
+
+            $columns = [];
+            foreach ($stmt->fetchAll() as $row) {
+                $field = (string) ($row['Field'] ?? '');
+                if ($field === '') {
+                    continue;
+                }
+                $rawType = (string) ($row['Type'] ?? '');
+                $columns[$field] = [
+                    'type' => SqlCommentEnum::normalizeBaseType($rawType),
+                    'comment' => trim((string) ($row['Comment'] ?? '')),
+                ];
+            }
+
+            return $columns;
+        } catch (PDOException|Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return array<string, array{type: string, comment: string}>
+     */
+    protected function parseMigrationColumnMeta(string $table): array
     {
         if (! defined('BASE_PATH')) {
             return [];
         }
-        $table = Str::plural(Str::snake($modelBase));
         $dir = BASE_PATH . '/migrations';
-        if ($table === '' || ! is_dir($dir)) {
+        if (! is_dir($dir)) {
             return [];
         }
 
@@ -412,16 +504,38 @@ class MakeModuleCommand extends HyperfCommand
                 continue;
             }
             $up = $this->extractMigrationUpBody($code);
-            foreach ($this->parseMigrationColumns($up !== '' ? $up : $code) as $field => $type) {
-                if ($type === '__drop__') {
+            foreach ($this->parseMigrationColumns($up !== '' ? $up : $code) as $field => $meta) {
+                if (($meta['type'] ?? '') === '__drop__') {
                     unset($columns[$field]);
                     continue;
                 }
-                $columns[$field] = $type;
+                $columns[$field] = [
+                    'type' => SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? '')),
+                    'comment' => (string) ($meta['comment'] ?? ($columns[$field]['comment'] ?? '')),
+                ];
             }
         }
 
         return $columns;
+    }
+
+    /**
+     * @param array<string, array{type?: string, comment?: string}> $columns
+     */
+    protected function buildEnumConstants(array $columns): string
+    {
+        $blocks = '';
+        foreach ($columns as $field => $meta) {
+            $comment = trim((string) ($meta['comment'] ?? ''));
+            $base = SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? ''));
+            $parsed = SqlCommentEnum::tryParse($comment, $base);
+            if ($parsed === null) {
+                continue;
+            }
+            $blocks .= SqlCommentEnum::renderConstants($field, $parsed['items'], $comment);
+        }
+
+        return $blocks;
     }
 
     protected function extractMigrationUpBody(string $code): string
@@ -438,7 +552,7 @@ class MakeModuleCommand extends HyperfCommand
     }
 
     /**
-     * @return array<string, string> field => type|__drop__
+     * @return array<string, array{type: string, comment: string}>
      */
     protected function parseMigrationColumns(string $code): array
     {
@@ -456,22 +570,29 @@ class MakeModuleCommand extends HyperfCommand
             if (in_array($method, $skipMethods, true)) {
                 continue;
             }
+            $comment = '';
+            if (preg_match("/->comment\(\s*['\"]([^'\"]*)['\"]\s*\)/u", $line, $cm)) {
+                $comment = $cm[1];
+            }
             if (strcasecmp($method, 'dropColumn') === 0) {
-                $columns[$field] = '__drop__';
+                $columns[$field] = ['type' => '__drop__', 'comment' => ''];
                 continue;
             }
-            $columns[$field] = strtolower($method);
+            $columns[$field] = ['type' => strtolower($method), 'comment' => $comment];
         }
 
-        // Db::statement ALTER ... ADD|MODIFY COLUMN `field` TYPE
+        // Db::statement ALTER ... ADD|MODIFY COLUMN `field` TYPE ... COMMENT '...'
         if (preg_match_all(
-            '/\b(?:ADD|MODIFY)(?:\s+COLUMN)?\s+[`]?(\w+)[`]?\s+(\w+)/is',
+            "/\b(?:ADD|MODIFY)(?:\s+COLUMN)?\s+[`]?(\w+)[`]?\s+(\w+)[^;]*?(?:COMMENT\s+['\"]([^'\"]*)['\"])?/is",
             $code,
             $matches,
             PREG_SET_ORDER
         )) {
             foreach ($matches as $row) {
-                $columns[$row[1]] = strtolower($row[2]);
+                $columns[$row[1]] = [
+                    'type' => strtolower($row[2]),
+                    'comment' => isset($row[3]) ? (string) $row[3] : ($columns[$row[1]]['comment'] ?? ''),
+                ];
             }
         }
 

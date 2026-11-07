@@ -8,4 +8,5 @@ use Goletter\ModelFilter\Filterable;
 class {{class}} extends Model
 {
     use Filterable;
+{{constants}}
 }
