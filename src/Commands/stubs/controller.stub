@@ -7,7 +7,13 @@ namespace {{namespace}};
 use App\Controller\AbstractController;
 use App\Model\{{model}};
 use App\Service\{{service}};
-use {{requestNamespace}}\{{request}};
+use {{requestNamespace}}\Index{{model}}Request;
+use {{requestNamespace}}\Show{{model}}Request;
+use {{requestNamespace}}\Store{{model}}Request;
+use {{requestNamespace}}\Update{{model}}Request;
+use {{resourceNamespace}}\{{resource}};
+use Goletter\Resource\Collection;
+use Goletter\Resource\Resource;
 use Hyperf\Di\Annotation\Inject;
 
 /**
@@ -23,35 +29,47 @@ class {{class}} extends AbstractController
       * @desc {{desc}}列表
       * @author {{author}} {{date}}
       */
-    public function index()
+    public function index(Index{{model}}Request $request): Collection
     {
-        return $this->collection($this->service->paginate($this->request->all()));
+        return $this->collection(
+            $this->service->paginate($request->all()),
+            {{resource}}::class
+        );
     }
 
     /**
       * @desc {{desc}}详情
       * @author {{author}} {{date}}
       */
-    public function show()
+    public function show(Show{{model}}Request $request): Resource
     {
-        return $this->success($this->service->show($this->request->all()));
+        return $this->success(
+            $this->service->show($request->all()),
+            {{resource}}::class
+        );
     }
 
     /**
       * @desc {{desc}}添加
       * @author {{author}} {{date}}
       */
-    public function store({{request}} $request)
+    public function store(Store{{model}}Request $request): Resource
     {
-        return $this->success($this->service->create($request->validated()));
+        return $this->success(
+            $this->service->create($request->validated()),
+            {{resource}}::class
+        );
     }
 
     /**
       * @desc {{desc}}更新
       * @author {{author}} {{date}}
       */
-    public function update({{model}} ${{modelName}}, {{request}} $request)
+    public function update({{model}} ${{modelName}}, Update{{model}}Request $request): Resource
     {
-        return $this->success($this->service->update(${{modelName}}, $request->validated()));
+        return $this->success(
+            $this->service->update(${{modelName}}, $request->validated()),
+            {{resource}}::class
+        );
     }
 }

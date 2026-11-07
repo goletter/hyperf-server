@@ -266,10 +266,12 @@ class MakeModuleCommand extends HyperfCommand
     protected function makeController(string $name)
     {
         [$namespace, $relativeDir] = $this->versionedNamespace('Controller');
-        [$requestNamespace] = $this->versionedNamespace('Request');
+        [$requestBaseNamespace] = $this->versionedNamespace('Request');
+        [$resourceNamespace] = $this->versionedNamespace('Resource');
+        $requestNamespace = $requestBaseNamespace . '\\' . $name;
         $class = "{$name}Controller";
         $service = "{$name}Service";
-        $request = "{$name}Request";
+        $resource = "{$name}Resource";
         $modeName = Str::camel($name);
         $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
 
@@ -289,7 +291,8 @@ class MakeModuleCommand extends HyperfCommand
                 '{{model}}',
                 '{{modelName}}',
                 '{{requestNamespace}}',
-                '{{request}}',
+                '{{resourceNamespace}}',
+                '{{resource}}',
                 '{{desc}}',
                 '{{author}}',
                 '{{date}}',
@@ -301,7 +304,8 @@ class MakeModuleCommand extends HyperfCommand
                 $name,
                 $modeName,
                 $requestNamespace,
-                $request,
+                $resourceNamespace,
+                $resource,
                 $name,
                 'yong',
                 date('Y-m-d'),
@@ -315,26 +319,27 @@ class MakeModuleCommand extends HyperfCommand
 
     protected function makeRequest(string $name)
     {
-        [$namespace, $relativeDir] = $this->versionedNamespace('Request');
-        $class = "{$name}Request";
-        $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
-
-        if (file_exists($path)) {
-            $this->warn("⚠️ Request 已存在: {$path}");
-            return;
-        }
-
-        $this->ensureDirectory(dirname($path));
+        [$baseNamespace, $relativeDir] = $this->versionedNamespace('Request');
+        $namespace = $baseNamespace . '\\' . $name;
+        $dir = BASE_PATH . "/app/{$relativeDir}/{$name}";
+        $this->ensureDirectory($dir);
 
         $stub = file_get_contents(__DIR__ . '/stubs/request.stub');
-        $content = str_replace(
-            ['{{namespace}}', '{{class}}'],
-            [$namespace, $class],
-            $stub
-        );
-
-        file_put_contents($path, $content);
-        $this->info("✅ 创建 Request: {$path}");
+        foreach (['Index', 'Show', 'Store', 'Update'] as $action) {
+            $class = "{$action}{$name}Request";
+            $path = "{$dir}/{$class}.php";
+            if (file_exists($path)) {
+                $this->warn("⚠️ Request 已存在: {$path}");
+                continue;
+            }
+            $content = str_replace(
+                ['{{namespace}}', '{{class}}'],
+                [$namespace, $class],
+                $stub
+            );
+            file_put_contents($path, $content);
+            $this->info("✅ 创建 Request: {$path}");
+        }
     }
 
     protected function makeResource(string $name)
