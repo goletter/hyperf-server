@@ -72,14 +72,14 @@ final class SqlCommentEnum
             if ($chunk === '') {
                 return null;
             }
-            if (! preg_match('/^([^|=]+)\|([a-z][a-z0-9_]*)=([^,=:|]+)$/u', $chunk, $matches)) {
+            if (! preg_match('/^([^|=]+)\|([a-zA-Z][a-zA-Z0-9_]*)=([^,=:|]+)$/u', $chunk, $matches)) {
                 return null;
             }
 
             $rawValue = trim($matches[1]);
-            $ident = $matches[2];
+            $ident = self::normalizeIdent($matches[2]);
             $tag = trim($matches[3]);
-            if ($tag === '') {
+            if ($ident === '' || $tag === '') {
                 return null;
             }
 
@@ -112,6 +112,7 @@ final class SqlCommentEnum
     public static function renderConstants(string $field, array $items, string $comment): string
     {
         $prefix = strtoupper($field);
+        $fieldSnake = self::normalizeIdent($field);
         $safeComment = str_replace('*/', '* /', trim($comment));
         $valueType = is_int($items[0]['value']) ? 'int' : 'string';
         $lines = [
@@ -120,25 +121,27 @@ final class SqlCommentEnum
             sprintf('    /** @var %s %s */', $valueType, $safeComment),
         ];
 
+        $constNames = [];
         foreach ($items as $item) {
-            $const = $prefix . '_' . strtoupper($item['ident']);
-            $lines[] = sprintf('    public const %s %s = %s;', $valueType, $const, self::phpLiteral($item['value']));
+            $constNames[] = $prefix . '_' . strtoupper(self::identSuffix($item['ident'], $fieldSnake));
+        }
+
+        foreach ($items as $i => $item) {
+            $lines[] = sprintf('    public const %s %s = %s;', $valueType, $constNames[$i], self::phpLiteral($item['value']));
         }
 
         $lines[] = '';
         $lines[] = sprintf('    /** @var array %s */', $safeComment);
         $lines[] = sprintf('    public const array %s_LABELS = [', $prefix);
-        foreach ($items as $item) {
-            $const = $prefix . '_' . strtoupper($item['ident']);
-            $lines[] = sprintf("        self::%s => '%s',", $const, addslashes($item['tag']));
+        foreach ($items as $i => $item) {
+            $lines[] = sprintf("        self::%s => '%s',", $constNames[$i], addslashes($item['tag']));
         }
         $lines[] = '    ];';
 
         $lines[] = '';
         $lines[] = sprintf('    /** @var array %s */', $safeComment);
         $lines[] = sprintf('    public const array %s_ALL = [', $prefix);
-        foreach ($items as $item) {
-            $const = $prefix . '_' . strtoupper($item['ident']);
+        foreach ($constNames as $const) {
             $lines[] = sprintf('        self::%s,', $const);
         }
         $lines[] = '    ];';
@@ -173,7 +176,7 @@ final class SqlCommentEnum
         }
         foreach ($chunks as $chunk) {
             $chunk = trim($chunk);
-            if ($chunk === '' || ! preg_match('/^([^|=]+)\|([a-z][a-z0-9_]*)=([^,=:|]+)$/u', $chunk)) {
+            if ($chunk === '' || ! preg_match('/^([^|=]+)\|([a-zA-Z][a-zA-Z0-9_]*)=([^,=:|]+)$/u', $chunk)) {
                 return false;
             }
         }
@@ -216,5 +219,34 @@ final class SqlCommentEnum
     private static function phpLiteral(int|string $value): string
     {
         return is_int($value) ? (string) $value : "'" . addslashes($value) . "'";
+    }
+
+    /** online / stepZero / step_zero → online / step_zero / step_zero */
+    private static function normalizeIdent(string $ident): string
+    {
+        $ident = trim($ident);
+        if ($ident === '') {
+            return '';
+        }
+        // camelCase → snake_case
+        $snake = strtolower((string) preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', $ident));
+        $snake = (string) preg_replace('/_+/', '_', $snake);
+
+        return trim($snake, '_');
+    }
+
+    /**
+     * 去掉与字段名重复的前缀，避免 step + stepZero → STEP_STEP_ZERO。
+     * stepZero + field step → zero；online + field status → online。
+     */
+    private static function identSuffix(string $identSnake, string $fieldSnake): string
+    {
+        if ($fieldSnake !== '' && str_starts_with($identSnake, $fieldSnake . '_')) {
+            $suffix = substr($identSnake, strlen($fieldSnake) + 1);
+
+            return $suffix !== '' ? $suffix : $identSnake;
+        }
+
+        return $identSnake;
     }
 }
