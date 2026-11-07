@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use App\Model\{{model}};
+use Goletter\Server\BaseService;
+
+/**
+  * @desc 更新
+  * @author {{author}} {{date}}
+  */
+class {{class}} extends BaseService
+{
+    public function handle({{model}} ${{modelName}}, array $data)
+    {
+        ${{modelName}}->fillDb($data);
+        ${{modelName}}->save();
+
+        return ${{modelName}};
+    }
+}

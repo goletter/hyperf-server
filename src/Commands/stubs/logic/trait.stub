@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Hyperf\Di\Annotation\Inject;
+
+trait {{class}}
+{
+{{injects}}
+}

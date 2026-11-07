@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace {{namespace}};
@@ -31,9 +32,9 @@ class {{class}} extends AbstractController
       * @desc {{desc}}详情
       * @author {{author}} {{date}}
       */
-    public function show({{model}} ${{modelName}})
+    public function detail()
     {
-        return $this->success(${{modelName}});
+        return $this->success($this->service->detail($this->request->all()));
     }
 
     /**
@@ -52,16 +53,5 @@ class {{class}} extends AbstractController
     public function update({{model}} ${{modelName}}, {{request}} $request)
     {
         return $this->success($this->service->update(${{modelName}}, $request->validated()));
-    }
-
-    /**
-      * @desc {{desc}}删除
-      * @author {{author}} {{date}}
-      */
-    public function destroy({{model}} ${{modelName}})
-    {
-        $this->service->delete(${{modelName}});
-
-        return $this->success();
     }
 }

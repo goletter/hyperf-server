@@ -1,47 +1,55 @@
 <?php
+
 declare(strict_types=1);
 
 namespace {{namespace}};
 
+use App\Logic\{{model}}\{{trait}};
 use App\Model\{{model}};
 use Goletter\Server\BaseService;
-use Hyperf\Collection\Arr;
 use Hyperf\Paginator\LengthAwarePaginator;
 
+/**
+  * @desc {{model}}
+  * @author {{author}} {{date}}
+  */
 class {{class}} extends BaseService
 {
+    use {{trait}};
+
+    /**
+      * @desc 列表
+      * @author {{author}} {{date}}
+      */
     public function paginate(array $params): LengthAwarePaginator
     {
-        return {{model}}::query()->filter($params)->orderByDesc('id')->paginate((int) Arr::get($params, 'pageSize', 20));
+        return $this->indexLogic->handle($params);
     }
 
-    public function show(int $id)
+    /**
+      * @desc 详情
+      * @author {{author}} {{date}}
+      */
+    public function detail(array $data)
     {
-        ${{modelName}} = {{model}}::query()->where('id', $id)->first();
-
-        return ${{modelName}};
+        return $this->detailLogic->handle($data);
     }
 
+    /**
+      * @desc 创建
+      * @author {{author}} {{date}}
+      */
     public function create(array $data)
     {
-        return $this->save(new {{model}}(), $data);
+        return $this->createLogic->handle($data);
     }
 
+    /**
+      * @desc 更新
+      * @author {{author}} {{date}}
+      */
     public function update({{model}} ${{modelName}}, array $data)
     {
-        return $this->save(${{modelName}}, $data);
-    }
-
-    public function save({{model}} ${{modelName}}, array $data)
-    {
-        ${{modelName}}->fillDb($data);
-        ${{modelName}}->save();
-
-        return ${{modelName}};
-    }
-
-    public function delete({{model}} ${{modelName}})
-    {
-        return ${{modelName}}->delete();
+        return $this->updateLogic->handle(${{modelName}}, $data);
     }
 }

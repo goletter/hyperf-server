@@ -27,6 +27,9 @@ class MakeModuleCommand extends HyperfCommand
     /** api | admin，仅在指定 --version 时生效 */
     protected string $area = 'api';
 
+    /** Logic 默认用例 */
+    private const LOGIC_ACTIONS = ['index', 'detail', 'create', 'update'];
+
     public function __construct(protected ContainerInterface $container)
     {
         parent::__construct('goletter:module');
@@ -35,7 +38,7 @@ class MakeModuleCommand extends HyperfCommand
     public function configure()
     {
         parent::configure();
-        $this->setDescription('生成 Model + Service + Controller + Request + Resource + Filter 六层结构')
+        $this->setDescription('生成 Model + Logic + Service + Controller + Request + Resource + Filter')
             ->addArgument('name', InputArgument::REQUIRED, '模块名（如 User）')
             ->addOption(
                 'api-version',
@@ -49,17 +52,27 @@ class MakeModuleCommand extends HyperfCommand
                 InputOption::VALUE_REQUIRED,
                 '作用域：api 或 admin（扁平模式忽略）',
                 'api'
+            )
+            ->addOption(
+                'skip-logic',
+                null,
+                InputOption::VALUE_NONE,
+                '不生成 Logic / Trait（Service 仍按旧内联风格，需自行调整）'
             );
     }
 
     public function handle()
     {
-        $name = ucfirst((string) $this->input->getArgument('name'));
+        $name = Str::studly((string) $this->input->getArgument('name'));
         $this->version = $this->normalizeVersion($this->input->getOption('api-version'));
         $this->area = $this->normalizeArea((string) $this->input->getOption('area'));
+        $skipLogic = (bool) $this->input->getOption('skip-logic');
 
         $this->makeModel($name);
-        $this->makeService($name);
+        if (! $skipLogic) {
+            $this->makeLogic($name);
+        }
+        $this->makeService($name, ! $skipLogic);
         $this->makeRequest($name);
         $this->makeController($name);
         $this->makeResource($name);
@@ -100,7 +113,86 @@ class MakeModuleCommand extends HyperfCommand
         $this->info("✅ 创建 Model: {$path}");
     }
 
-    protected function makeService(string $name)
+    protected function makeLogic(string $name): void
+    {
+        $namespace = 'App\\Logic\\' . $name;
+        $dir = BASE_PATH . '/app/Logic/' . $name;
+        $this->ensureDirectory($dir);
+
+        $author = 'yong';
+        $date = date('Y-m-d');
+        $modelName = Str::camel($name);
+
+        foreach (self::LOGIC_ACTIONS as $action) {
+            $studly = Str::studly($action);
+            $class = $studly . 'Logic';
+            $path = $dir . '/' . $class . '.php';
+            if (file_exists($path)) {
+                $this->warn("⚠️ Logic 已存在: {$path}");
+                continue;
+            }
+
+            $stub = file_get_contents(__DIR__ . '/stubs/logic/' . $action . '.stub');
+            $content = str_replace(
+                [
+                    '{{namespace}}',
+                    '{{class}}',
+                    '{{model}}',
+                    '{{modelName}}',
+                    '{{author}}',
+                    '{{date}}',
+                ],
+                [$namespace, $class, $name, $modelName, $author, $date],
+                $stub
+            );
+            file_put_contents($path, $content);
+            $this->info("✅ 创建 Logic: {$path}");
+        }
+
+        $this->makeLogicTrait($name, $namespace, $dir);
+    }
+
+    protected function makeLogicTrait(string $name, string $namespace, string $dir): void
+    {
+        $traitClass = $name . 'Trait';
+        $path = $dir . '/' . $traitClass . '.php';
+        $existed = file_exists($path);
+
+        $injectsMap = [];
+        if ($existed) {
+            $code = (string) file_get_contents($path);
+            if (preg_match_all('/private\s+(\w+Logic)\s+\$(\w+)\s*;/', $code, $m, PREG_SET_ORDER)) {
+                foreach ($m as $row) {
+                    $injectsMap[$row[1]] = $row[2];
+                }
+            }
+        }
+
+        foreach (self::LOGIC_ACTIONS as $action) {
+            $logicClass = Str::studly($action) . 'Logic';
+            $prop = Str::camel(Str::studly($action)) . 'Logic';
+            $injectsMap[$logicClass] = $prop;
+        }
+
+        $lines = [];
+        foreach ($injectsMap as $logicClass => $prop) {
+            $lines[] = '    #[Inject]';
+            $lines[] = "    private {$logicClass} \${$prop};";
+            $lines[] = '';
+        }
+        $injects = rtrim(implode("\n", $lines));
+
+        $stub = file_get_contents(__DIR__ . '/stubs/logic/trait.stub');
+        $content = str_replace(
+            ['{{namespace}}', '{{class}}', '{{injects}}'],
+            [$namespace, $traitClass, $injects === '' ? '' : $injects . "\n"],
+            $stub
+        );
+        file_put_contents($path, $content);
+        $this->info(($existed ? '✅ 更新 Trait: ' : '✅ 创建 Trait: ') . $path);
+    }
+
+    protected function makeService(string $name, bool $withLogic = true)
     {
         $namespace = 'App\Service';
         $class = "{$name}Service";
@@ -114,12 +206,41 @@ class MakeModuleCommand extends HyperfCommand
 
         $this->ensureDirectory(dirname($path));
 
-        $stub = file_get_contents(__DIR__ . '/stubs/service.stub');
-        $content = str_replace(
-            ['{{namespace}}', '{{class}}', '{{model}}', '{{modelName}}'],
-            [$namespace, $class, $name, $modeName],
-            $stub
-        );
+        if ($withLogic) {
+            $stub = file_get_contents(__DIR__ . '/stubs/service.stub');
+            $content = str_replace(
+                [
+                    '{{namespace}}',
+                    '{{class}}',
+                    '{{model}}',
+                    '{{modelName}}',
+                    '{{trait}}',
+                    '{{author}}',
+                    '{{date}}',
+                ],
+                [
+                    $namespace,
+                    $class,
+                    $name,
+                    $modeName,
+                    $name . 'Trait',
+                    'yong',
+                    date('Y-m-d'),
+                ],
+                $stub
+            );
+        } else {
+            // 兼容旧版内联 Service（无 Logic）
+            $stub = file_get_contents(__DIR__ . '/stubs/service_inline.stub');
+            if ($stub === false) {
+                $stub = file_get_contents(__DIR__ . '/stubs/service.stub');
+            }
+            $content = str_replace(
+                ['{{namespace}}', '{{class}}', '{{model}}', '{{modelName}}', '{{trait}}', '{{author}}', '{{date}}'],
+                [$namespace, $class, $name, $modeName, $name . 'Trait', 'yong', date('Y-m-d')],
+                $stub
+            );
+        }
 
         file_put_contents($path, $content);
         $this->info("✅ 创建 Service: {$path}");

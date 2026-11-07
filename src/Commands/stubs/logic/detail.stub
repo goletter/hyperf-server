@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use App\Model\{{model}};
+use Goletter\Server\BaseService;
+use Hyperf\Collection\Arr;
+
+/**
+  * @desc 详情
+  * @author {{author}} {{date}}
+  */
+class {{class}} extends BaseService
+{
+    public function handle(array $data)
+    {
+        $id = (int) Arr::get($data, 'id');
+
+        return {{model}}::query()->where('id', $id)->first();
+    }
+}

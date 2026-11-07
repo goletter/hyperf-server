@@ -1,0 +1,47 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use App\Model\{{model}};
+use Goletter\Server\BaseService;
+use Hyperf\Collection\Arr;
+use Hyperf\Paginator\LengthAwarePaginator;
+
+/**
+  * @desc {{model}}
+  * @author {{author}} {{date}}
+  */
+class {{class}} extends BaseService
+{
+    public function paginate(array $params): LengthAwarePaginator
+    {
+        return {{model}}::query()->filter($params)->orderByDesc('id')->paginate((int) Arr::get($params, 'pageSize', 20));
+    }
+
+    public function detail(array $data)
+    {
+        $id = (int) Arr::get($data, 'id');
+
+        return {{model}}::query()->where('id', $id)->first();
+    }
+
+    public function create(array $data)
+    {
+        return $this->save(new {{model}}(), $data);
+    }
+
+    public function update({{model}} ${{modelName}}, array $data)
+    {
+        return $this->save(${{modelName}}, $data);
+    }
+
+    public function save({{model}} ${{modelName}}, array $data)
+    {
+        ${{modelName}}->fillDb($data);
+        ${{modelName}}->save();
+
+        return ${{modelName}};
+    }
+}
