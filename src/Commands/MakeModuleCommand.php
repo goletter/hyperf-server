@@ -324,8 +324,38 @@ class MakeModuleCommand extends HyperfCommand
         $dir = BASE_PATH . "/app/{$relativeDir}/{$name}";
         $this->ensureDirectory($dir);
 
+        $schema = $this->buildRequestSchema($this->resolveTableColumnMeta($name));
+        $specs = [
+            'Index' => [
+                'rules' => [
+                    'page' => 'integer|min:1',
+                    'pageSize' => 'integer|min:1|max:100',
+                ],
+                'attributes' => [
+                    'page' => '页码',
+                    'pageSize' => '每页数量',
+                ],
+            ],
+            'Show' => [
+                'rules' => [
+                    'id' => 'required|integer|min:1',
+                ],
+                'attributes' => [
+                    'id' => 'ID',
+                ],
+            ],
+            'Store' => [
+                'rules' => $schema['rules_store'],
+                'attributes' => $schema['attributes_store'],
+            ],
+            'Update' => [
+                'rules' => $schema['rules_update'],
+                'attributes' => $schema['attributes_update'],
+            ],
+        ];
+
         $stub = file_get_contents(__DIR__ . '/stubs/request.stub');
-        foreach (['Index', 'Show', 'Store', 'Update'] as $action) {
+        foreach ($specs as $action => $spec) {
             $class = "{$action}{$name}Request";
             $path = "{$dir}/{$class}.php";
             if (file_exists($path)) {
@@ -333,8 +363,13 @@ class MakeModuleCommand extends HyperfCommand
                 continue;
             }
             $content = str_replace(
-                ['{{namespace}}', '{{class}}'],
-                [$namespace, $class],
+                ['{{namespace}}', '{{class}}', '{{rules}}', '{{attributes}}'],
+                [
+                    $namespace,
+                    $class,
+                    $this->renderPhpStringArray($spec['rules'], 8),
+                    $this->renderPhpStringArray($spec['attributes'], 8),
+                ],
                 $stub
             );
             file_put_contents($path, $content);
@@ -432,7 +467,7 @@ class MakeModuleCommand extends HyperfCommand
     }
 
     /**
-     * @return array<string, array{type: string, comment: string}>
+     * @return array<string, array{type: string, raw_type: string, comment: string, nullable: bool, default: mixed, key: string, extra: string}>
      */
     protected function fetchTableColumnsFromDb(string $table): array
     {
@@ -466,7 +501,12 @@ class MakeModuleCommand extends HyperfCommand
                 $rawType = (string) ($row['Type'] ?? '');
                 $columns[$field] = [
                     'type' => SqlCommentEnum::normalizeBaseType($rawType),
+                    'raw_type' => $rawType,
                     'comment' => trim((string) ($row['Comment'] ?? '')),
+                    'nullable' => strtoupper((string) ($row['Null'] ?? 'YES')) === 'YES',
+                    'default' => $row['Default'] ?? null,
+                    'key' => (string) ($row['Key'] ?? ''),
+                    'extra' => (string) ($row['Extra'] ?? ''),
                 ];
             }
 
@@ -477,7 +517,7 @@ class MakeModuleCommand extends HyperfCommand
     }
 
     /**
-     * @return array<string, array{type: string, comment: string}>
+     * @return array<string, array{type: string, raw_type: string, comment: string, nullable: bool, default: mixed, key: string, extra: string}>
      */
     protected function parseMigrationColumnMeta(string $table): array
     {
@@ -514,14 +554,124 @@ class MakeModuleCommand extends HyperfCommand
                     unset($columns[$field]);
                     continue;
                 }
+                $type = SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? ''));
                 $columns[$field] = [
-                    'type' => SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? '')),
+                    'type' => $type,
+                    'raw_type' => $type,
                     'comment' => (string) ($meta['comment'] ?? ($columns[$field]['comment'] ?? '')),
+                    'nullable' => true,
+                    'default' => null,
+                    'key' => $field === 'id' ? 'PRI' : '',
+                    'extra' => $field === 'id' ? 'auto_increment' : '',
                 ];
             }
         }
 
         return $columns;
+    }
+
+    /**
+     * @param array<string, array{type?: string, raw_type?: string, comment?: string, nullable?: bool, default?: mixed, key?: string, extra?: string}> $columns
+     * @return array{rules_store: array<string, string>, rules_update: array<string, string>, attributes_store: array<string, string>, attributes_update: array<string, string>}
+     */
+    protected function buildRequestSchema(array $columns): array
+    {
+        $rulesStore = [];
+        $rulesUpdate = [];
+        $attributes = [];
+
+        foreach ($columns as $field => $meta) {
+            $comment = trim((string) ($meta['comment'] ?? ''));
+            $attributes[$field] = SqlCommentEnum::label($comment, $field);
+
+            $key = (string) ($meta['key'] ?? '');
+            $extra = (string) ($meta['extra'] ?? '');
+            if ($key === 'PRI' || str_contains($extra, 'auto_increment')) {
+                continue;
+            }
+            if (in_array($field, ['created_at', 'updated_at', 'deleted_at'], true)) {
+                continue;
+            }
+
+            $rule = $this->columnValidationRule($meta);
+            $required = ! ($meta['nullable'] ?? true) && ($meta['default'] ?? null) === null;
+            $rulesStore[$field] = ($required ? 'required|' : '') . $rule;
+            $rulesUpdate[$field] = ($required ? 'sometimes|required|' : '') . $rule;
+        }
+
+        return [
+            'rules_store' => $rulesStore,
+            'rules_update' => $rulesUpdate,
+            'attributes_store' => array_intersect_key($attributes, $rulesStore),
+            'attributes_update' => array_intersect_key($attributes, $rulesUpdate),
+        ];
+    }
+
+    /**
+     * @param array{type?: string, raw_type?: string, comment?: string} $meta
+     */
+    protected function columnValidationRule(array $meta): string
+    {
+        $typeMap = [
+            'bigint' => 'integer',
+            'int' => 'integer',
+            'integer' => 'integer',
+            'smallint' => 'integer',
+            'mediumint' => 'integer',
+            'tinyint' => 'integer',
+            'decimal' => 'numeric',
+            'double' => 'numeric',
+            'float' => 'numeric',
+            'json' => 'array',
+            'date' => 'date',
+            'datetime' => 'date',
+            'timestamp' => 'date',
+        ];
+
+        $base = SqlCommentEnum::normalizeBaseType((string) ($meta['type'] ?? ''));
+        $rawType = (string) ($meta['raw_type'] ?? $base);
+        $comment = trim((string) ($meta['comment'] ?? ''));
+
+        if (str_contains($comment, '雪花')) {
+            return 'string|regex:/^\d+$/';
+        }
+
+        $rule = $typeMap[$base] ?? 'string';
+
+        if ($base === 'enum' && preg_match_all("/'((?:[^'\\\\]|\\\\.)*)'/", $rawType, $matches)) {
+            return 'string|in:' . implode(',', $matches[1]);
+        }
+
+        if (in_array($base, ['varchar', 'char', 'string'], true) && preg_match('/\((\d+)\)/', $rawType, $m)) {
+            $rule .= '|max:' . $m[1];
+        }
+
+        $parsed = SqlCommentEnum::tryParse($comment, $base);
+        if ($parsed !== null) {
+            $values = array_map(static fn (array $item): string => (string) $item['value'], $parsed['items']);
+            $rule .= '|in:' . implode(',', $values);
+        }
+
+        return $rule;
+    }
+
+    /**
+     * @param array<string, string> $items
+     */
+    protected function renderPhpStringArray(array $items, int $indent = 8): string
+    {
+        if ($items === []) {
+            return '[]';
+        }
+
+        $pad = str_repeat(' ', $indent + 4);
+        $close = str_repeat(' ', $indent);
+        $lines = [];
+        foreach ($items as $key => $value) {
+            $lines[] = sprintf("%s'%s' => '%s',", $pad, addslashes((string) $key), addslashes((string) $value));
+        }
+
+        return "[\n" . implode("\n", $lines) . "\n{$close}]";
     }
 
     /**
