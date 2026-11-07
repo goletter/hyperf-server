@@ -7,7 +7,7 @@ namespace {{namespace}};
 use App\Model\{{model}};
 use Goletter\Server\BaseService;
 use Hyperf\Collection\Arr;
-    10|
+
 /**
   * @desc 详情
   * @author {{author}} {{date}}
