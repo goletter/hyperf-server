@@ -357,15 +357,172 @@ class MakeModuleCommand extends HyperfCommand
 
         $this->ensureDirectory(dirname($path));
 
+        $columns = $this->resolveTableColumns($name);
+        $methods = $this->buildFilterMethods($columns);
+        if ($methods === '') {
+            $this->warn("⚠️ 未从 migrations 解析到 {$name} 表字段，已生成空 Filter（可补迁移后 --force 重生成）");
+        } else {
+            $this->line(sprintf('   Filter 字段：%s', implode(', ', array_keys($columns))));
+        }
+
         $stub = file_get_contents(__DIR__ . '/stubs/filter.stub');
         $content = str_replace(
-            ['{{namespace}}', '{{class}}', '{{model}}'],
-            [$namespace, $class, $name],
+            ['{{namespace}}', '{{class}}', '{{model}}', '{{author}}', '{{date}}', '{{methods}}'],
+            [$namespace, $class, $name, 'yong', date('Y-m-d'), $methods],
             $stub
         );
 
         file_put_contents($path, $content);
         $this->info("✅ 创建 Filter: {$path}");
+    }
+
+    /**
+     * 从 migrations 合并 create/alter，推断表字段及类型。
+     *
+     * @return array<string, string> column => blueprint method（string/integer/...）
+     */
+    protected function resolveTableColumns(string $modelBase): array
+    {
+        if (! defined('BASE_PATH')) {
+            return [];
+        }
+        $table = Str::plural(Str::snake($modelBase));
+        $dir = BASE_PATH . '/migrations';
+        if ($table === '' || ! is_dir($dir)) {
+            return [];
+        }
+
+        $files = array_values(array_unique(array_merge(
+            glob($dir . '/*_create_' . $table . '_table.php') ?: [],
+            glob($dir . '/*_to_' . $table . '_table.php') ?: [],
+            glob($dir . '/*_' . $table . '_table.php') ?: [],
+        )));
+        if ($files === []) {
+            $files = glob($dir . '/*' . $table . '*.php') ?: [];
+        }
+        if ($files === []) {
+            return [];
+        }
+        sort($files);
+
+        $columns = [];
+        foreach ($files as $file) {
+            $code = @file_get_contents((string) $file);
+            if ($code === false) {
+                continue;
+            }
+            $up = $this->extractMigrationUpBody($code);
+            foreach ($this->parseMigrationColumns($up !== '' ? $up : $code) as $field => $type) {
+                if ($type === '__drop__') {
+                    unset($columns[$field]);
+                    continue;
+                }
+                $columns[$field] = $type;
+            }
+        }
+
+        return $columns;
+    }
+
+    protected function extractMigrationUpBody(string $code): string
+    {
+        if (! preg_match('/function\s+up\s*\([^)]*\)\s*(?::\s*\??[\w|\\\\]+\s*)?\{/s', $code, $m, PREG_OFFSET_CAPTURE)) {
+            return '';
+        }
+        $start = (int) $m[0][1] + strlen($m[0][0]);
+        if (preg_match('/function\s+down\s*\(/s', $code, $dm, PREG_OFFSET_CAPTURE, $start)) {
+            return substr($code, $start, (int) $dm[0][1] - $start);
+        }
+
+        return substr($code, $start);
+    }
+
+    /**
+     * @return array<string, string> field => type|__drop__
+     */
+    protected function parseMigrationColumns(string $code): array
+    {
+        $columns = [];
+        $skipMethods = [
+            'index', 'unique', 'primary', 'foreign', 'timestamps', 'datetimes',
+            'softDeletes', 'rememberToken', 'comment', 'renameColumn', 'rename',
+        ];
+        foreach (preg_split('/\r\n|\n|\r/', $code) ?: [] as $line) {
+            if (! preg_match('/\$table->(\w+)\(\s*[\'"]([\w]+)[\'"]/', $line, $m)) {
+                continue;
+            }
+            $method = $m[1];
+            $field = $m[2];
+            if (in_array($method, $skipMethods, true)) {
+                continue;
+            }
+            if (strcasecmp($method, 'dropColumn') === 0) {
+                $columns[$field] = '__drop__';
+                continue;
+            }
+            $columns[$field] = strtolower($method);
+        }
+
+        // Db::statement ALTER ... ADD|MODIFY COLUMN `field` TYPE
+        if (preg_match_all(
+            '/\b(?:ADD|MODIFY)(?:\s+COLUMN)?\s+[`]?(\w+)[`]?\s+(\w+)/is',
+            $code,
+            $matches,
+            PREG_SET_ORDER
+        )) {
+            foreach ($matches as $row) {
+                $columns[$row[1]] = strtolower($row[2]);
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * @param array<string, string> $columns
+     */
+    protected function buildFilterMethods(array $columns): string
+    {
+        $skip = [
+            'id', 'created_at', 'updated_at', 'deleted_at',
+            'password', 'remember_token', 'token',
+        ];
+        $blocks = [];
+        foreach ($columns as $field => $type) {
+            if (in_array($field, $skip, true)) {
+                continue;
+            }
+            $method = Str::camel($field);
+            if ($this->isFuzzyFilterType($type, $field)) {
+                $where = '$this->where(\'' . $field . '\', \'like\', "%{$' . $method . '}%");';
+            } else {
+                $where = '$this->where(\'' . $field . '\', $' . $method . ');';
+            }
+            $blocks[] = "    public function {$method}(\${$method})\n    {\n        {$where}\n    }";
+        }
+
+        return $blocks === [] ? '' : implode("\n\n", $blocks) . "\n";
+    }
+
+    protected function isFuzzyFilterType(string $type, string $field): bool
+    {
+        $type = strtolower($type);
+        // SQL 原生类型（ALTER）也归一
+        $fuzzyTypes = [
+            'string', 'char', 'varchar', 'text', 'mediumtext', 'longtext',
+            'tinytext', 'enum',
+        ];
+        if (in_array($type, $fuzzyTypes, true)) {
+            return true;
+        }
+        // 名称类字段即使类型未知也倾向模糊
+        foreach (['name', 'title', 'code', 'email', 'remark', 'memo', 'desc', 'no', 'mobile', 'phone'] as $hint) {
+            if (str_contains($field, $hint)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

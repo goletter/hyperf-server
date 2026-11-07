@@ -1,11 +1,16 @@
 <?php
+
 declare(strict_types=1);
 
 namespace {{namespace}};
 
 use Goletter\ModelFilter\ModelFilter;
 
+/**
+  * @desc {{model}} 筛选
+  * @author {{author}} {{date}}
+  */
 class {{class}} extends ModelFilter
 {
-
+{{methods}}
 }
