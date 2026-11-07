@@ -49,6 +49,8 @@
         }
     },
     "suggest": {
-        "nesbot/carbon": "goletter:api-call-stats 命令解析日志时间需要"
+        "nesbot/carbon": "goletter:api-call-stats 命令解析日志时间需要",
+        "hyperf/crontab": "gen:crontab 生成的 #[Crontab] 注解壳需要",
+        "hyperf/stringable": "gen:crontab / goletter:module 类名 Studly/Kebab 转换需要"
     }
 }

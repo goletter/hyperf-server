@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Goletter\Server\Commands\BaseCommand;
+use Hyperf\Command\Annotation\Command;
+
+/** {{memo_comment}}（gen:crontab 生成；由 {{crontabClass}} 按 '{{rule_comment}}' 调度，也可手动执行排障）。 */
+#[Command]
+class {{class}} extends BaseCommand
+{
+    public function __construct()
+    {
+        parent::__construct('{{command}}');
+    }
+
+    public function handle(): int
+    {
+        $this->printContext();
+
+        // TODO(gen:crontab): 实现任务逻辑
+
+        return self::SUCCESS;
+    }
+}

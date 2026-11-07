@@ -12,6 +12,7 @@ namespace Goletter\Server;
 
 use Goletter\Server\Commands\ApiCallStatsCommand;
 use Goletter\Server\Commands\ChainFailedCommand;
+use Goletter\Server\Commands\GenCrontabCommand;
 use Goletter\Server\Commands\MakeModuleCommand;
 use Goletter\Server\Commands\SerialRecoverCommand;
 use Goletter\Server\Process\SerialRecoverProcess;
@@ -25,6 +26,7 @@ class ConfigProvider
             'commands' => [
                 MakeModuleCommand::class,
                 ApiCallStatsCommand::class,
+                GenCrontabCommand::class,
                 SerialRecoverCommand::class,
                 ChainFailedCommand::class,
             ],

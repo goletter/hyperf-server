@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Hyperf\Crontab\Annotation\Crontab;
+
+/** {{memo_comment}}（gen:crontab 生成；任务体在 {{commandClass}}）。 */
+#[Crontab(
+    rule: '{{rule}}',
+    name: '{{class}}',
+    type: 'command',
+    singleton: true,
+    callback: ['command' => '{{command}}'],
+    memo: '{{memo}}',
+    enable: true,
+)]
+class {{class}}
+{
+}
