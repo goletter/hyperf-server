@@ -483,17 +483,22 @@ class MakeModuleCommand extends HyperfCommand
      */
     protected function buildFilterMethods(array $columns): string
     {
-        $skip = [
+        $skipFields = [
             'id', 'created_at', 'updated_at', 'deleted_at',
             'password', 'remember_token', 'token',
         ];
+        // json 不生成筛选；仅 varchar 类用 like，其余精确 where
+        $skipTypes = ['json', 'jsonb'];
+        $likeTypes = ['string', 'varchar', 'char', 'nvarchar'];
+
         $blocks = [];
         foreach ($columns as $field => $type) {
-            if (in_array($field, $skip, true)) {
+            $type = strtolower($type);
+            if (in_array($field, $skipFields, true) || in_array($type, $skipTypes, true)) {
                 continue;
             }
             $method = Str::camel($field);
-            if ($this->isFuzzyFilterType($type, $field)) {
+            if (in_array($type, $likeTypes, true)) {
                 $where = '$this->where(\'' . $field . '\', \'like\', "%{$' . $method . '}%");';
             } else {
                 $where = '$this->where(\'' . $field . '\', $' . $method . ');';
@@ -502,27 +507,6 @@ class MakeModuleCommand extends HyperfCommand
         }
 
         return $blocks === [] ? '' : implode("\n\n", $blocks) . "\n";
-    }
-
-    protected function isFuzzyFilterType(string $type, string $field): bool
-    {
-        $type = strtolower($type);
-        // SQL 原生类型（ALTER）也归一
-        $fuzzyTypes = [
-            'string', 'char', 'varchar', 'text', 'mediumtext', 'longtext',
-            'tinytext', 'enum',
-        ];
-        if (in_array($type, $fuzzyTypes, true)) {
-            return true;
-        }
-        // 名称类字段即使类型未知也倾向模糊
-        foreach (['name', 'title', 'code', 'email', 'remark', 'memo', 'desc', 'no', 'mobile', 'phone'] as $hint) {
-            if (str_contains($field, $hint)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
