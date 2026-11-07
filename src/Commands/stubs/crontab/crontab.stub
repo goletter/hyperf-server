@@ -18,4 +18,13 @@ use Hyperf\Crontab\Annotation\Crontab;
 )]
 class {{class}}
 {
+    public function execute()
+    {
+        //
+    }
+
+    public function isEnable(): bool
+    {
+        return true;
+    }
 }

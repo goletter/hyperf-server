@@ -36,13 +36,13 @@ class MakeModuleCommand extends HyperfCommand
 
     public function __construct(protected ContainerInterface $container)
     {
-        parent::__construct('goletter:module');
+        parent::__construct('gen:crud');
     }
 
     public function configure()
     {
         parent::configure();
-        $this->setDescription('生成 Model + Logic + Service + Controller + Request + Resource + Filter')
+        $this->setDescription('按数据表生成 CRUD 六件套（Model/Filter/Service/Request/Resource/Controller）')
             ->addArgument('name', InputArgument::REQUIRED, '模块名（如 User）')
             ->addOption(
                 'api-version',

@@ -32,7 +32,7 @@ class ApiCallStatsCommand extends HyperfCommand
 
     public function __construct()
     {
-        parent::__construct('goletter:api-call-stats');
+        parent::__construct('gen:api-call-stats');
     }
 
     public function configure(): void
