@@ -20,7 +20,7 @@ class {{class}} extends BaseService
         return {{model}}::query()->filter($params)->orderByDesc('id')->paginate((int) Arr::get($params, 'pageSize', 20));
     }
 
-    public function detail(array $data)
+    public function show(array $data)
     {
         $id = (int) Arr::get($data, 'id');
 

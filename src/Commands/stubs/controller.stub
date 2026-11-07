@@ -32,9 +32,9 @@ class {{class}} extends AbstractController
       * @desc {{desc}}详情
       * @author {{author}} {{date}}
       */
-    public function detail()
+    public function show()
     {
-        return $this->success($this->service->detail($this->request->all()));
+        return $this->success($this->service->show($this->request->all()));
     }
 
     /**

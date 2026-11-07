@@ -30,9 +30,9 @@ class {{class}} extends BaseService
       * @desc 详情
       * @author {{author}} {{date}}
       */
-    public function detail(array $data)
+    public function show(array $data)
     {
-        return $this->detailLogic->handle($data);
+        return $this->showLogic->handle($data);
     }
 
     /**

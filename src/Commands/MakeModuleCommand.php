@@ -32,7 +32,7 @@ class MakeModuleCommand extends HyperfCommand
     protected string $area = 'api';
 
     /** Logic 默认用例 */
-    private const LOGIC_ACTIONS = ['index', 'detail', 'create', 'update'];
+    private const LOGIC_ACTIONS = ['index', 'show', 'create', 'update'];
 
     public function __construct(protected ContainerInterface $container)
     {
