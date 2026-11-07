@@ -107,18 +107,18 @@ final class SqlCommentEnum
 
     /**
      * @param list<array{value: int|string, ident: string, tag: string}> $items
-     * @param string $comment 原始列注释，整段进 @var 供 PhpStorm 悬停
+     * @param string $comment 原始列注释，只写在 START 下一行，避免重复
      */
     public static function renderConstants(string $field, array $items, string $comment): string
     {
         $prefix = strtoupper($field);
         $fieldSnake = self::normalizeIdent($field);
-        $safeComment = str_replace('*/', '* /', trim($comment));
+        $safeComment = str_replace(["\r", "\n"], ' ', trim($comment));
         $valueType = is_int($items[0]['value']) ? 'int' : 'string';
         $lines = [
             '',
             sprintf('    // === %s START（由生成器生成，请勿手改）===', $prefix),
-            sprintf('    /** @var %s %s */', $valueType, $safeComment),
+            sprintf('    // %s', $safeComment),
         ];
 
         $constNames = [];
@@ -131,7 +131,6 @@ final class SqlCommentEnum
         }
 
         $lines[] = '';
-        $lines[] = sprintf('    /** @var array %s */', $safeComment);
         $lines[] = sprintf('    public const array %s_LABELS = [', $prefix);
         foreach ($items as $i => $item) {
             $lines[] = sprintf("        self::%s => '%s',", $constNames[$i], addslashes($item['tag']));
@@ -139,7 +138,6 @@ final class SqlCommentEnum
         $lines[] = '    ];';
 
         $lines[] = '';
-        $lines[] = sprintf('    /** @var array %s */', $safeComment);
         $lines[] = sprintf('    public const array %s_ALL = [', $prefix);
         foreach ($constNames as $const) {
             $lines[] = sprintf('        self::%s,', $const);
