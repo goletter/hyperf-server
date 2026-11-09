@@ -51,6 +51,9 @@
     "suggest": {
         "nesbot/carbon": "goletter:api-call-stats 命令解析日志时间需要",
         "hyperf/crontab": "gen:crontab 生成的 #[Crontab] 注解壳需要",
-        "hyperf/stringable": "gen:crontab / goletter:module 类名 Studly/Kebab 转换需要"
+        "hyperf/stringable": "gen:crontab / goletter:module / BaseDispatcherController 需要",
+        "hyperf/validation": "BaseDispatcherController 主动校验 FormRequest 需要",
+        "hyperf/db-connection": "BaseDispatcherController / ModelBindingMiddleware 注入 Model 需要",
+        "hyperf/http-message": "BaseDispatcherController NotFoundHttpException 需要"
     }
 }
