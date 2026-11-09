@@ -48,6 +48,12 @@ class ConfigProvider
                     'source' => __DIR__ . '/../publish/rate_limit.php',
                     'destination' => BASE_PATH . '/config/autoload/rate_limit.php',
                 ],
+                [
+                    'id' => 'api_dispatcher',
+                    'description' => '多版本 API 网关（BaseDispatcherController）版本列表配置。',
+                    'source' => __DIR__ . '/../publish/api_dispatcher.php',
+                    'destination' => BASE_PATH . '/config/autoload/api_dispatcher.php',
+                ],
             ],
         ];
     }

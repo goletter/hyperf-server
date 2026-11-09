@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Goletter\Server\Http;
 
+use Hyperf\Contract\ConfigInterface;
 use Hyperf\DbConnection\Model\Model;
 use Hyperf\HttpMessage\Exception\NotFoundHttpException;
 use Hyperf\HttpServer\Contract\RequestInterface;
@@ -19,6 +20,7 @@ use ReflectionNamedType;
 /**
  * 多版本资源网关基类：/api/{resource}/... → {Namespace}\V{n}\{Resource}Controller.
  *
+ * 版本列表优先读 config/autoload/api_dispatcher.php（vendor:publish id=api_dispatcher）；
  * 应用侧薄封装只需设置 $controllerNamespace，例如：
  * - App\Controller\Api\ApiController → App\Controller\Api
  * - App\Controller\Admin\ApiController → App\Controller\Admin
@@ -26,23 +28,23 @@ use ReflectionNamedType;
 abstract class BaseDispatcherController
 {
     /**
-     * 版本从新到旧。子类可覆盖，例如只保留 ['v2', 'v1']。
+     * 版本从新到旧（配置缺失时的回退；优先 api_dispatcher.versions）。
      *
      * @var string[]
      */
     protected array $versions = ['v3', 'v2', 'v1'];
 
+    /** 配置缺失时的回退；优先 api_dispatcher.version_header */
     protected string $versionHeader = 'X-API-Version';
 
     /**
-     * 未传版本头时的默认版本；空则取 $versions 第一个（最新）。
-     * 降级顺序：当前版本 → 更旧版本，例如 v3 → v2 → v1。
+     * 未传版本头时的默认版本；空则取 versions 第一个（最新）。
+     * 优先 api_dispatcher.default。
      */
     protected string $defaultVersion = '';
 
     /** 资源名，空则从类名推断：UserController -> User */
     protected string $resourceName = '';
-
     /**
      * 版本实现所在命名空间前缀。
      * - API：App\Controller\Api → App\Controller\Api\V1\UserController
@@ -148,7 +150,7 @@ abstract class BaseDispatcherController
      */
     protected function dispatchAction(RequestInterface $request, string $action, ?string $id = null): mixed
     {
-        $version = $request->getHeaderLine($this->versionHeader) ?: $this->resolveDefaultVersion();
+        $version = $request->getHeaderLine($this->getVersionHeader()) ?: $this->resolveDefaultVersion();
 
         foreach ($this->getFallbackChain($version) as $ver) {
             $class = $this->controllerClass($ver);
@@ -184,13 +186,50 @@ abstract class BaseDispatcherController
         return $ref->getDeclaringClass()->getName() === ltrim($class, '\\');
     }
 
+    /**
+     * @return string[]
+     */
+    protected function getVersions(): array
+    {
+        $configured = $this->dispatcherConfig('versions');
+        if (is_array($configured) && $configured !== []) {
+            return array_values(array_map('strval', $configured));
+        }
+
+        return $this->versions;
+    }
+
+    protected function getVersionHeader(): string
+    {
+        $configured = $this->dispatcherConfig('version_header');
+        if (is_string($configured) && $configured !== '') {
+            return $configured;
+        }
+
+        return $this->versionHeader;
+    }
+
     protected function resolveDefaultVersion(): string
     {
+        $configured = $this->dispatcherConfig('default');
+        if (is_string($configured) && $configured !== '') {
+            return $configured;
+        }
+
         if ($this->defaultVersion !== '') {
             return $this->defaultVersion;
         }
 
-        return $this->versions[0] ?? 'v1';
+        return $this->getVersions()[0] ?? 'v1';
+    }
+
+    protected function dispatcherConfig(string $key): mixed
+    {
+        if (! $this->container->has(ConfigInterface::class)) {
+            return null;
+        }
+
+        return $this->container->get(ConfigInterface::class)->get('api_dispatcher.' . $key);
     }
 
     /**
@@ -243,7 +282,7 @@ abstract class BaseDispatcherController
             $version = 'v' . $version;
         }
 
-        $all = array_map('strtolower', $this->versions);
+        $all = array_map('strtolower', $this->getVersions());
         $idx = array_search($version, $all, true);
 
         if ($idx === false) {
