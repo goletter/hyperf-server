@@ -58,7 +58,7 @@ abstract class BaseDispatcherController
      * @var array<string, array{0: string, 1: string}>
      */
     protected array $httpActions = [
-        'get' => ['index', 'index'],
+        'get' => ['index', 'show'],
         'post' => ['create', 'create'],
         'put' => ['update', 'update'],
         'patch' => ['patch', 'patch'],
