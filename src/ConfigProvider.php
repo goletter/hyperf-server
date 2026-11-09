@@ -54,6 +54,12 @@ class ConfigProvider
                     'source' => __DIR__ . '/../publish/api_dispatcher.php',
                     'destination' => BASE_PATH . '/config/autoload/api_dispatcher.php',
                 ],
+                [
+                    'id' => 'translation',
+                    'description' => '多语言默认 locale（LocaleMiddleware / 校验文案）。',
+                    'source' => __DIR__ . '/../publish/translation.php',
+                    'destination' => BASE_PATH . '/config/autoload/translation.php',
+                ],
             ],
         ];
     }
