@@ -441,7 +441,7 @@ class MakeModuleCommand extends HyperfCommand
      */
     protected function resolveTableColumnMeta(string $modelBase): array
     {
-        $table = Str::plural(Str::snake($modelBase));
+        $table = Str::snake($modelBase);
         if ($table === '') {
             return [];
         }
