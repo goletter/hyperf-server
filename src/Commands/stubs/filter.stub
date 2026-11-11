@@ -8,7 +8,6 @@ use Goletter\ModelFilter\ModelFilter;
 
 /**
   * @desc {{model}} 筛选
-  * @author {{author}} {{date}}
   */
 class {{class}} extends ModelFilter
 {

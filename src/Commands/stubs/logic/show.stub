@@ -10,10 +10,13 @@ use Hyperf\Collection\Arr;
 
 /**
   * @desc 详情
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
+    /**
+      * @param array $data
+      * @return {{model}}|null
+      */
     public function handle(array $data)
     {
         $id = (int) Arr::get($data, 'id');

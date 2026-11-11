@@ -7,13 +7,17 @@ namespace {{namespace}};
 use App\Model\{{model}};
 use Goletter\Server\BaseService;
 use Hyperf\Collection\Arr;
+use Hyperf\Paginator\LengthAwarePaginator;
 
 /**
   * @desc 列表
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
+    /**
+      * @param array $params
+      * @return LengthAwarePaginator
+      */
     public function handle(array $params)
     {
         return {{model}}::query()->filter($params)->paginate((int) Arr::get($params, 'pageSize', 20));

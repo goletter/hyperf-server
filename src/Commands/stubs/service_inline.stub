@@ -11,15 +11,24 @@ use Hyperf\Paginator\LengthAwarePaginator;
 
 /**
   * @desc {{model}}
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
+    /**
+      * @desc 列表
+      * @param array $params
+      * @return LengthAwarePaginator
+      */
     public function paginate(array $params): LengthAwarePaginator
     {
         return {{model}}::query()->filter($params)->orderByDesc('id')->paginate((int) Arr::get($params, 'pageSize', 20));
     }
 
+    /**
+      * @desc 详情
+      * @param array $data
+      * @return {{model}}|null
+      */
     public function show(array $data)
     {
         $id = (int) Arr::get($data, 'id');
@@ -27,16 +36,33 @@ class {{class}} extends BaseService
         return {{model}}::query()->where('id', $id)->first();
     }
 
+    /**
+      * @desc 创建
+      * @param array $data
+      * @return {{model}}
+      */
     public function create(array $data)
     {
         return $this->save(new {{model}}(), $data);
     }
 
+    /**
+      * @desc 更新
+      * @param {{model}} ${{modelName}}
+      * @param array $data
+      * @return {{model}}
+      */
     public function update({{model}} ${{modelName}}, array $data)
     {
         return $this->save(${{modelName}}, $data);
     }
 
+    /**
+      * @desc 保存
+      * @param {{model}} ${{modelName}}
+      * @param array $data
+      * @return {{model}}
+      */
     public function save({{model}} ${{modelName}}, array $data)
     {
         ${{modelName}}->fillDb($data);

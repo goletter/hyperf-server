@@ -9,10 +9,14 @@ use Goletter\Server\BaseService;
 
 /**
   * @desc 更新
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
+    /**
+      * @param {{model}} ${{modelName}}
+      * @param array $data
+      * @return {{model}}
+      */
     public function handle({{model}} ${{modelName}}, array $data)
     {
         ${{modelName}}->fillDb($data);

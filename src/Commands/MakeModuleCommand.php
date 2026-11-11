@@ -136,8 +136,6 @@ class MakeModuleCommand extends HyperfCommand
         $dir = BASE_PATH . '/app/Logic/' . $name;
         $this->ensureDirectory($dir);
 
-        $author = 'yong';
-        $date = date('Y-m-d');
         $modelName = Str::camel($name);
 
         foreach (self::LOGIC_ACTIONS as $action) {
@@ -156,10 +154,8 @@ class MakeModuleCommand extends HyperfCommand
                     '{{class}}',
                     '{{model}}',
                     '{{modelName}}',
-                    '{{author}}',
-                    '{{date}}',
                 ],
-                [$namespace, $class, $name, $modelName, $author, $date],
+                [$namespace, $class, $name, $modelName],
                 $stub
             );
             file_put_contents($path, $content);
@@ -232,8 +228,6 @@ class MakeModuleCommand extends HyperfCommand
                     '{{model}}',
                     '{{modelName}}',
                     '{{trait}}',
-                    '{{author}}',
-                    '{{date}}',
                 ],
                 [
                     $namespace,
@@ -241,8 +235,6 @@ class MakeModuleCommand extends HyperfCommand
                     $name,
                     $modeName,
                     $name . 'Trait',
-                    'yong',
-                    date('Y-m-d'),
                 ],
                 $stub
             );
@@ -253,8 +245,8 @@ class MakeModuleCommand extends HyperfCommand
                 $stub = file_get_contents(__DIR__ . '/stubs/service.stub');
             }
             $content = str_replace(
-                ['{{namespace}}', '{{class}}', '{{model}}', '{{modelName}}', '{{trait}}', '{{author}}', '{{date}}'],
-                [$namespace, $class, $name, $modeName, $name . 'Trait', 'yong', date('Y-m-d')],
+                ['{{namespace}}', '{{class}}', '{{model}}', '{{modelName}}', '{{trait}}'],
+                [$namespace, $class, $name, $modeName, $name . 'Trait'],
                 $stub
             );
         }
@@ -294,8 +286,6 @@ class MakeModuleCommand extends HyperfCommand
                 '{{resourceNamespace}}',
                 '{{resource}}',
                 '{{desc}}',
-                '{{author}}',
-                '{{date}}',
             ],
             [
                 $namespace,
@@ -307,8 +297,6 @@ class MakeModuleCommand extends HyperfCommand
                 $resourceNamespace,
                 $resource,
                 $name,
-                'yong',
-                date('Y-m-d'),
             ],
             $stub
         );
@@ -424,8 +412,8 @@ class MakeModuleCommand extends HyperfCommand
 
         $stub = file_get_contents(__DIR__ . '/stubs/filter.stub');
         $content = str_replace(
-            ['{{namespace}}', '{{class}}', '{{model}}', '{{author}}', '{{date}}', '{{methods}}'],
-            [$namespace, $class, $name, 'yong', date('Y-m-d'), $methods],
+            ['{{namespace}}', '{{class}}', '{{model}}', '{{methods}}'],
+            [$namespace, $class, $name, $methods],
             $stub
         );
 
@@ -779,7 +767,7 @@ class MakeModuleCommand extends HyperfCommand
             } else {
                 $where = '$this->where(\'' . $field . '\', $' . $method . ');';
             }
-            $blocks[] = "    public function {$method}(\${$method})\n    {\n        {$where}\n    }";
+            $blocks[] = "    /**\n      * @param mixed \${$method}\n      * @return void\n      */\n    public function {$method}(\${$method})\n    {\n        {$where}\n    }";
         }
 
         return $blocks === [] ? '' : implode("\n\n", $blocks) . "\n";
@@ -828,11 +816,6 @@ class MakeModuleCommand extends HyperfCommand
     protected function normalizeArea(string $area): string
     {
         $area = strtolower(trim($area));
-        if (! in_array($area, ['api', 'admin'], true)) {
-            $this->warn("⚠️ 未知 area={$area}，已回退为 api");
-
-            return 'api';
-        }
 
         return $area;
     }

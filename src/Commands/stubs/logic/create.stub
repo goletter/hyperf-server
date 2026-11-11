@@ -9,10 +9,13 @@ use Goletter\Server\BaseService;
 
 /**
   * @desc 创建
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
+    /**
+      * @param array $data
+      * @return {{model}}
+      */
     public function handle(array $data)
     {
         ${{modelName}} = new {{model}}();

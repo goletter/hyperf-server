@@ -11,7 +11,6 @@ use Hyperf\Paginator\LengthAwarePaginator;
 
 /**
   * @desc {{model}}
-  * @author {{author}} {{date}}
   */
 class {{class}} extends BaseService
 {
@@ -19,7 +18,8 @@ class {{class}} extends BaseService
 
     /**
       * @desc 列表
-      * @author {{author}} {{date}}
+      * @param array $params
+      * @return LengthAwarePaginator
       */
     public function paginate(array $params): LengthAwarePaginator
     {
@@ -28,7 +28,8 @@ class {{class}} extends BaseService
 
     /**
       * @desc 详情
-      * @author {{author}} {{date}}
+      * @param array $data
+      * @return {{model}}|null
       */
     public function show(array $data)
     {
@@ -37,7 +38,8 @@ class {{class}} extends BaseService
 
     /**
       * @desc 创建
-      * @author {{author}} {{date}}
+      * @param array $data
+      * @return {{model}}
       */
     public function create(array $data)
     {
@@ -46,7 +48,9 @@ class {{class}} extends BaseService
 
     /**
       * @desc 更新
-      * @author {{author}} {{date}}
+      * @param {{model}} ${{modelName}}
+      * @param array $data
+      * @return {{model}}
       */
     public function update({{model}} ${{modelName}}, array $data)
     {
