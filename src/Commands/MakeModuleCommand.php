@@ -62,6 +62,12 @@ class MakeModuleCommand extends HyperfCommand
                 null,
                 InputOption::VALUE_NONE,
                 '不生成 Logic / Trait（Service 仍按旧内联风格，需自行调整）'
+            )
+            ->addOption(
+                'force',
+                'f',
+                InputOption::VALUE_NONE,
+                '覆盖已存在的生成文件'
             );
     }
 
@@ -99,11 +105,12 @@ class MakeModuleCommand extends HyperfCommand
         $namespace = 'App\Model';
         $path = BASE_PATH . "/app/Model/{$name}.php";
 
-        if (file_exists($path)) {
+        if ($this->shouldSkipExisting($path)) {
             $this->warn("⚠️ Model 已存在: {$path}");
             return;
         }
 
+        $existed = file_exists($path);
         $this->ensureDirectory(dirname($path));
 
         $columns = $this->resolveTableColumnMeta($name);
@@ -127,7 +134,7 @@ class MakeModuleCommand extends HyperfCommand
         );
 
         file_put_contents($path, $content);
-        $this->info("✅ 创建 Model: {$path}");
+        $this->info(($existed ? '✅ 覆盖 Model: ' : '✅ 创建 Model: ') . $path);
     }
 
     protected function makeLogic(string $name): void
@@ -142,11 +149,12 @@ class MakeModuleCommand extends HyperfCommand
             $studly = Str::studly($action);
             $class = $studly . 'Logic';
             $path = $dir . '/' . $class . '.php';
-            if (file_exists($path)) {
+            if ($this->shouldSkipExisting($path)) {
                 $this->warn("⚠️ Logic 已存在: {$path}");
                 continue;
             }
 
+            $existed = file_exists($path);
             $stub = file_get_contents(__DIR__ . '/stubs/logic/' . $action . '.stub');
             $content = str_replace(
                 [
@@ -159,7 +167,7 @@ class MakeModuleCommand extends HyperfCommand
                 $stub
             );
             file_put_contents($path, $content);
-            $this->info("✅ 创建 Logic: {$path}");
+            $this->info(($existed ? '✅ 覆盖 Logic: ' : '✅ 创建 Logic: ') . $path);
         }
 
         $this->makeLogicTrait($name, $namespace, $dir);
@@ -212,11 +220,12 @@ class MakeModuleCommand extends HyperfCommand
         $modeName = Str::camel($name);
         $path = BASE_PATH . "/app/Service/{$class}.php";
 
-        if (file_exists($path)) {
+        if ($this->shouldSkipExisting($path)) {
             $this->warn("⚠️ Service 已存在: {$path}");
             return;
         }
 
+        $existed = file_exists($path);
         $this->ensureDirectory(dirname($path));
 
         if ($withLogic) {
@@ -252,7 +261,7 @@ class MakeModuleCommand extends HyperfCommand
         }
 
         file_put_contents($path, $content);
-        $this->info("✅ 创建 Service: {$path}");
+        $this->info(($existed ? '✅ 覆盖 Service: ' : '✅ 创建 Service: ') . $path);
     }
 
     protected function makeController(string $name)
@@ -267,11 +276,12 @@ class MakeModuleCommand extends HyperfCommand
         $modeName = Str::camel($name);
         $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
 
-        if (file_exists($path)) {
+        if ($this->shouldSkipExisting($path)) {
             $this->warn("⚠️ Controller 已存在: {$path}");
             return;
         }
 
+        $existed = file_exists($path);
         $this->ensureDirectory(dirname($path));
 
         $stub = file_get_contents(__DIR__ . '/stubs/controller.stub');
@@ -302,7 +312,7 @@ class MakeModuleCommand extends HyperfCommand
         );
 
         file_put_contents($path, $content);
-        $this->info("✅ 创建 Controller: {$path}");
+        $this->info(($existed ? '✅ 覆盖 Controller: ' : '✅ 创建 Controller: ') . $path);
     }
 
     protected function makeRequest(string $name)
@@ -346,10 +356,11 @@ class MakeModuleCommand extends HyperfCommand
         foreach ($specs as $action => $spec) {
             $class = "{$action}{$name}Request";
             $path = "{$dir}/{$class}.php";
-            if (file_exists($path)) {
+            if ($this->shouldSkipExisting($path)) {
                 $this->warn("⚠️ Request 已存在: {$path}");
                 continue;
             }
+            $existed = file_exists($path);
             $content = str_replace(
                 ['{{namespace}}', '{{class}}', '{{rules}}', '{{attributes}}'],
                 [
@@ -361,7 +372,7 @@ class MakeModuleCommand extends HyperfCommand
                 $stub
             );
             file_put_contents($path, $content);
-            $this->info("✅ 创建 Request: {$path}");
+            $this->info(($existed ? '✅ 覆盖 Request: ' : '✅ 创建 Request: ') . $path);
         }
     }
 
@@ -371,11 +382,12 @@ class MakeModuleCommand extends HyperfCommand
         $class = "{$name}Resource";
         $path = BASE_PATH . "/app/{$relativeDir}/{$class}.php";
 
-        if (file_exists($path)) {
+        if ($this->shouldSkipExisting($path)) {
             $this->warn("⚠️ Resource 已存在: {$path}");
             return;
         }
 
+        $existed = file_exists($path);
         $this->ensureDirectory(dirname($path));
 
         $stub = file_get_contents(__DIR__ . '/stubs/resource.stub');
@@ -386,7 +398,7 @@ class MakeModuleCommand extends HyperfCommand
         );
 
         file_put_contents($path, $content);
-        $this->info("✅ 创建 Resource: {$path}");
+        $this->info(($existed ? '✅ 覆盖 Resource: ' : '✅ 创建 Resource: ') . $path);
     }
 
     protected function makeFilter(string $name)
@@ -395,11 +407,12 @@ class MakeModuleCommand extends HyperfCommand
         $class = "{$name}Filter";
         $path = BASE_PATH . "/app/Model/Filters/{$name}Filter.php";
 
-        if (file_exists($path)) {
+        if ($this->shouldSkipExisting($path)) {
             $this->warn("⚠️ Filter 已存在: {$path}");
             return;
         }
 
+        $existed = file_exists($path);
         $this->ensureDirectory(dirname($path));
 
         $columns = $this->resolveTableColumns($name);
@@ -418,7 +431,7 @@ class MakeModuleCommand extends HyperfCommand
         );
 
         file_put_contents($path, $content);
-        $this->info("✅ 创建 Filter: {$path}");
+        $this->info(($existed ? '✅ 覆盖 Filter: ' : '✅ 创建 Filter: ') . $path);
     }
 
     /**
@@ -826,4 +839,11 @@ class MakeModuleCommand extends HyperfCommand
             mkdir($dir, 0755, true);
         }
     }
+
+    /** 文件已存在且未传 --force 时跳过。 */
+    protected function shouldSkipExisting(string $path): bool
+    {
+        return file_exists($path) && ! (bool) $this->input->getOption('force');
+    }
 }
+
