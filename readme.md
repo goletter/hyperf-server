@@ -14,7 +14,7 @@ composer require goletter/hyperf-server
 |------|------|
 | `Router` | 扩展 Hyperf Router，提供 `apiResource` |
 | Middleware | CORS、Trace、Locale、幂等、限流、响应格式化、模型绑定等 |
-| `Http\BaseDispatcherController` | 多版本资源网关；版本列表见 `config/autoload/api_dispatcher.php`（与 openapi 共用） |
+| `Http\BaseDispatcherController` | 多版本资源网关；版本列表见 `config/autoload/api_dispatcher.php`（与 openapi 共用）；自定义动作路径推荐 snake（`un_bind`，兼容 `un-bind`） |
 | `LocaleMiddleware` | 请求语言；默认配置见 `config/autoload/translation.php`（`vendor:publish --id=translation`） |
 | `QueueService` | 异步队列推送 / 批量 / 任务链 / **按 key 串行**，自动透传 `trace_id` |
 | Casts | `Encrypted`、`JsonArrayCast`、`ResourceUrl` 等 |
@@ -287,6 +287,18 @@ Router::apiResource('users', App\Controller\UserController::class);
 // GET/POST /users
 // GET/PUT|PATCH/DELETE /users/{user}
 ```
+
+## 分发网关自定义动作
+
+`BaseDispatcherController` 将路径动作归一成 camelCase 方法名；**推荐 snake**：
+
+| 路径 | 方法 |
+|------|------|
+| `/api/account_demands/un_bind` | `unBind()` |
+| `/api/account_demands/un-bind` | `unBind()`（兼容） |
+| `/api/orders/export/csv` | `exportCsv()`（两段非 id 时用 `_` 拼接） |
+
+与 `goletter/hyperf-openapi` 生成的 action 段（`Str::snake`）对齐。
 
 ## License
 

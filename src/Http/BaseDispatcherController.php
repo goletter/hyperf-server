@@ -104,7 +104,7 @@ abstract class BaseDispatcherController
      * 约定：
      * - /resource                  REST 集合
      * - /resource/{id}             REST 单资源（id 默认可为数字）
-     * - /resource/{action}         自定义动作
+     * - /resource/{action}         自定义动作（推荐 snake：un_bind；兼容 un-bind）
      * - /resource/{id}/{action}    带 id 的自定义动作
      * - /resource/{action}/{id}    同上（动作在前）.
      */
@@ -140,8 +140,8 @@ abstract class BaseDispatcherController
             return [$this->normalizeAction($seg1), $seg2];
         }
 
-        // export/csv -> exportCsv
-        return [$this->normalizeAction($seg1 . '-' . $seg2), null];
+        // export/csv → export_csv → exportCsv（与 openapi action 段 snake 一致；- 仍可解析）
+        return [$this->normalizeAction($seg1 . '_' . $seg2), null];
     }
 
     /**
@@ -264,7 +264,10 @@ abstract class BaseDispatcherController
         return (bool) preg_match('/^\d+$/', $segment);
     }
 
-    /** send-email / send_email -> sendEmail */
+    /**
+     * 路径动作 → 方法名：un_bind / un-bind → unBind。
+     * 文档与约定优先 snake（与 account_demands/un_bind、openapi actionSegment 一致）。
+     */
     protected function normalizeAction(string $action): string
     {
         $action = str_replace(['-', '_'], ' ', strtolower($action));
