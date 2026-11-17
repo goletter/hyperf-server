@@ -43,7 +43,11 @@ class MakeModuleCommand extends HyperfCommand
     {
         parent::configure();
         $this->setDescription('按数据表生成 CRUD 六件套（Model/Filter/Service/Request/Resource/Controller）')
-            ->addArgument('name', InputArgument::REQUIRED, '模块名（如 User）')
+            ->addArgument(
+                'name',
+                InputArgument::REQUIRED,
+                '模块名或表名（如 User / account_users / companies；复数表名会单数化后 Studly）'
+            )
             ->addOption(
                 'api-version',
                 null,
@@ -73,7 +77,8 @@ class MakeModuleCommand extends HyperfCommand
 
     public function handle()
     {
-        $name = Str::studly((string) $this->input->getArgument('name'));
+        // 与 BaseDispatcherController::handleResource 一致：account_users → AccountUser，companies → Company
+        $name = $this->normalizeModuleName((string) $this->input->getArgument('name'));
         $this->version = $this->normalizeVersion($this->input->getOption('api-version'));
         $this->area = $this->normalizeArea((string) $this->input->getOption('area'));
         $skipLogic = (bool) $this->input->getOption('skip-logic');
@@ -92,6 +97,19 @@ class MakeModuleCommand extends HyperfCommand
             ? '（无版本，扁平目录）'
             : sprintf('（%s / %s）', $this->area, $this->version);
         $this->line("<info>✅ 模块 {$name} 生成完成！{$hint}</info>");
+    }
+
+    /**
+     * 模块名归一：支持 User / account_users / companies / account-users → AccountUser / Company.
+     */
+    protected function normalizeModuleName(string $name): string
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return $name;
+        }
+
+        return Str::studly(Str::singular($name));
     }
 
     /** 默认 API 版本（未传 --api-version 时使用）。 */
@@ -449,22 +467,40 @@ class MakeModuleCommand extends HyperfCommand
 
     /**
      * 优先读库表 COMMENT，失败则回退 migrations。
+     * 表名候选：复数 snake（account_users）优先，再回退单数 snake（兼容旧库）。
      *
      * @return array<string, array{type: string, comment: string}>
      */
     protected function resolveTableColumnMeta(string $modelBase): array
     {
-        $table = Str::snake($modelBase);
-        if ($table === '') {
+        foreach ($this->tableNameCandidates($modelBase) as $table) {
+            $fromDb = $this->fetchTableColumnsFromDb($table);
+            if ($fromDb !== []) {
+                return $fromDb;
+            }
+
+            $fromMigration = $this->parseMigrationColumnMeta($table);
+            if ($fromMigration !== []) {
+                return $fromMigration;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function tableNameCandidates(string $modelBase): array
+    {
+        $singular = Str::snake($modelBase);
+        if ($singular === '') {
             return [];
         }
 
-        $fromDb = $this->fetchTableColumnsFromDb($table);
-        if ($fromDb !== []) {
-            return $fromDb;
-        }
+        $plural = Str::plural($singular);
 
-        return $this->parseMigrationColumnMeta($table);
+        return array_values(array_unique([$plural, $singular]));
     }
 
     /**

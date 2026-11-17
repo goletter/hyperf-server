@@ -18,7 +18,7 @@ composer require goletter/hyperf-server
 | `LocaleMiddleware` | 请求语言；默认配置见 `config/autoload/translation.php`（`vendor:publish --id=translation`） |
 | `QueueService` | 异步队列推送 / 批量 / 任务链 / **按 key 串行**，自动透传 `trace_id` |
 | Casts | `Encrypted`、`JsonArrayCast`、`ResourceUrl` 等 |
-| `MakeModuleCommand` | 模块脚手架命令 |
+| `MakeModuleCommand` | `gen:crud` 模块脚手架；支持复数表名（`account_users` → `AccountUser`，与网关一致） |
 
 ## 队列 QueueService
 
